@@ -1,0 +1,50 @@
+# Environment variables
+.env
+.env.local
+.env*.local
+
+# Dependencies
+node_modules/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+outputs/
+*.csv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+.coverage
+.pytest_cache/
+*_test.py
+test_*.py
+hotpads_debug.html
+fix_spider.py
+
+# Misc
+*.pdf
+*.zip
+*.tar.gz

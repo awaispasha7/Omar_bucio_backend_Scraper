@@ -1,0 +1,8 @@
+.env
+venv/
+vnv/
+__pycache__/
+*.pyc
+.idea/
+output/*.csv
+*.log
