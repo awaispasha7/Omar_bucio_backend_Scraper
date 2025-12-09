@@ -4,12 +4,16 @@ Provides endpoints to trigger scraper and check status
 """
 
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import subprocess
 import os
 import threading
 from datetime import datetime
 
 app = Flask(__name__)
+# Enable CORS for all routes - allows frontend to call backend API
+# You can restrict to specific origins if needed: CORS(app, origins=["https://scraperfrontend-production.up.railway.app"])
+CORS(app)
 
 # Global variables to track scraper status
 scraper_status = {
