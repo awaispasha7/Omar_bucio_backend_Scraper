@@ -26,6 +26,7 @@ all_scrapers_status = {"running": False, "last_run": None, "last_result": None, 
 
 # Global process tracker for stopping
 active_processes = {}
+# Trigger backend rebuild
 
 def run_scraper():
     """Run the scraper in a separate thread"""
