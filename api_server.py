@@ -10,10 +10,11 @@ import os
 import threading
 from datetime import datetime
 import sys
+import time
+import queue
 
 app = Flask(__name__)
 # Enable CORS for all routes - allows frontend to call backend API
-# You can restrict to specific origins if needed: CORS(app, origins=["https://scraperfrontend-production.up.railway.app"])
 CORS(app)
 
 # Global status dictionaries
@@ -26,591 +27,357 @@ all_scrapers_status = {"running": False, "last_run": None, "last_result": None, 
 
 # Global process tracker for stopping
 active_processes = {}
-# Trigger backend rebuild
 
-def run_scraper():
-    """Run the scraper in a separate thread"""
-    global scraper_status
+# Global Log Buffer
+# List of dicts: { "timestamp": iso_str, "message": str, "type": "info"|"error"|"success" }
+LOG_BUFFER = []
+MAX_LOG_SIZE = 1000
+
+def add_log(message, type="info"):
+    """Add a log entry to the buffer"""
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "message": message,
+        "type": type
+    }
+    LOG_BUFFER.append(entry)
+    # Print to server console as well
+    print(f"[{entry['timestamp']}] [{type.upper()}] {message}")
     
-    if scraper_status["running"]:
-        return {"error": "Scraper is already running"}
-    
-    scraper_status["running"] = True
-    scraper_status["error"] = None
-    scraper_status["last_run"] = datetime.now().isoformat()
-    
-    def execute_scraper():
+    # Keep buffer size manageable
+    if len(LOG_BUFFER) > MAX_LOG_SIZE:
+        LOG_BUFFER.pop(0)
+
+def stream_output(process, scraper_name):
+    """Read output from process and add to logs"""
+    for line in iter(process.stdout.readline, ''):
+        if line:
+            add_log(f"[{scraper_name}] {line.strip()}", "info")
+    process.stdout.close()
+
+def run_process_with_logging(cmd, cwd, scraper_name, status_dict):
+    """Run a subprocess and stream its output to logs"""
+    try:
+        add_log(f"Starting {scraper_name}...", "info")
+        status_dict["running"] = True
+        status_dict["error"] = None
+        status_dict["last_run"] = datetime.now().isoformat()
+        
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, # Merge stderr into stdout for simple logging
+            text=True,
+            bufsize=1, # Line buffered
+            universal_newlines=True
+        )
+        
+        # Register process for stopping
+        active_processes[scraper_name] = process
+        
+        # Read output in real-time
+        stream_output(process, scraper_name)
+        
+        # Wait for completion
+        returncode = process.wait()
+        
+        # Unregister
+        if scraper_name in active_processes:
+            del active_processes[scraper_name]
+            
+        success = returncode == 0
+        status_dict["running"] = False
+        
+        result_info = {
+            "success": success,
+            "returncode": returncode,
+            "timestamp": datetime.now().isoformat()
+        }
+        status_dict["last_result"] = result_info
+        
+        if success:
+            add_log(f"{scraper_name} completed successfully.", "success")
+        else:
+            msg = f"{scraper_name} failed with return code {returncode}."
+            add_log(msg, "error")
+            status_dict["error"] = msg
+            
+        return success
+        
+    except Exception as e:
+        status_dict["running"] = False
+        ensure_process_killed(scraper_name)
+        err_msg = f"Error running {scraper_name}: {str(e)}"
+        add_log(err_msg, "error")
+        status_dict["error"] = err_msg
+        status_dict["last_result"] = {"success": False, "error": str(e)}
+        return False
+
+def ensure_process_killed(scraper_name):
+    """Kill process if it exists in active_processes"""
+    if scraper_name in active_processes:
         try:
-            # Run the scraper script
-            result = subprocess.run(
-                [sys.executable, "forsalebyowner_selenium_scraper.py"],
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour timeout
-            )
-            
-            scraper_status["last_result"] = {
-                "success": result.returncode == 0,
-                "stdout": result.stdout[-1000:] if result.stdout else "",  # Last 1000 chars
-                "stderr": result.stderr[-1000:] if result.stderr else "",  # Last 1000 chars
-                "returncode": result.returncode
-            }
-            
-            if result.returncode != 0:
-                scraper_status["error"] = result.stderr[-500:] if result.stderr else "Unknown error"
-        except subprocess.TimeoutExpired:
-            scraper_status["error"] = "Scraper timed out after 1 hour"
-            scraper_status["last_result"] = {"success": False, "error": "Timeout"}
-        except Exception as e:
-            scraper_status["error"] = str(e)
-            scraper_status["last_result"] = {"success": False, "error": str(e)}
-        finally:
-            scraper_status["running"] = False
-    
-    # Start scraper in background thread
-    thread = threading.Thread(target=execute_scraper)
-    thread.daemon = True
-    thread.start()
-    
-    return {"message": "Scraper started", "started_at": scraper_status["last_run"]}
+            active_processes[scraper_name].terminate()
+            time.sleep(1)
+            if active_processes[scraper_name].poll() is None:
+                active_processes[scraper_name].kill()
+        except:
+            pass
+        del active_processes[scraper_name]
+
+# ==================================
+# API ROUTES
+# ==================================
 
 @app.route('/', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
     return jsonify({
         "status": "healthy",
         "service": "ForSaleByOwner Scraper API",
         "timestamp": datetime.now().isoformat()
     })
 
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    """Get logs, optionally filtering by query param 'since' (timestamp)"""
+    since = request.args.get('since')
+    if since:
+        filtered = [l for l in LOG_BUFFER if l['timestamp'] > since]
+        return jsonify(filtered)
+    return jsonify(LOG_BUFFER)
+
 @app.route('/api/status', methods=['GET'])
 def get_status():
-    """Get scraper status"""
     return jsonify({
         "status": "running" if scraper_status["running"] else "idle",
         "last_run": scraper_status["last_run"],
-        "last_result": scraper_status["last_result"],
-        "error": scraper_status["error"],
-        "timestamp": datetime.now().isoformat()
+        "error": scraper_status["error"]
     })
 
-@app.route('/api/trigger', methods=['POST'])
+@app.route('/api/trigger', methods=['POST', 'GET'])
 def trigger_scraper():
-    """Trigger the scraper"""
-    result = run_scraper()
-    return jsonify(result)
-
-@app.route('/api/trigger', methods=['GET'])
-def trigger_scraper_get():
-    """Trigger the scraper via GET (for easy testing)"""
-    result = run_scraper()
-    return jsonify(result)
-
-@app.route('/api/trigger-apartments', methods=['POST'])
-def trigger_apartments_scraper():
-    """Trigger the apartments scraper"""
-    global apartments_scraper_status
+    """Trigger FSBO scraper"""
+    if scraper_status["running"]:
+        return jsonify({"error": "FSBO Scraper is already running"}), 400
     
-    if apartments_scraper_status["running"]:
-        return jsonify({"error": "Apartments scraper is already running"}), 400
+    def worker():
+        run_process_with_logging(
+            [sys.executable, "forsalebyowner_selenium_scraper.py"],
+            os.path.dirname(os.path.abspath(__file__)),
+            "FSBO",
+            scraper_status
+        )
     
-    # Get city parameter from request before starting thread (request context not available in thread)
-    city = "chicago-il"
-    if request.is_json and request.json:
-        city = request.json.get("city", city)
-    elif request.args:
-        city = request.args.get("city", city)
-    
-    apartments_scraper_status["running"] = True
-    apartments_scraper_status["error"] = None
-    apartments_scraper_status["last_run"] = datetime.now().isoformat()
-    
-    def execute_apartments_scraper(city_param):
-        try:
-            # Get the base directory (where api_server.py is located)
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            
-            # Path to apartments scraper directory (new flattened structure)
-            scraper_dir = os.path.join(base_dir, "Apartments_Scraper")
-            
-            if not os.path.exists(scraper_dir):
-                apartments_scraper_status["error"] = f"Scraper directory not found: {scraper_dir}"
-                apartments_scraper_status["last_result"] = {
-                    "success": False,
-                    "error": apartments_scraper_status["error"],
-                    "stdout": "",
-                    "stderr": apartments_scraper_status["error"],
-                    "returncode": 1
-                }
-                apartments_scraper_status["running"] = False
-                return
-            
-            # Run the apartments scraper using Scrapy
-            # The scraper will automatically upload to Supabase via SupabasePipeline
-            result = subprocess.run(
-                [sys.executable, "-m", "scrapy", "crawl", "apartments_frbo", "-a", f"city={city_param}"],
-                cwd=scraper_dir,
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour timeout
-            )
-            
-            apartments_scraper_status["last_result"] = {
-                "success": result.returncode == 0,
-                "stdout": result.stdout[-1000:] if result.stdout else "",  # Last 1000 chars
-                "stderr": result.stderr[-1000:] if result.stderr else "",  # Last 1000 chars
-                "returncode": result.returncode,
-                "city": city_param
-            }
-            
-            if result.returncode != 0:
-                apartments_scraper_status["error"] = result.stderr[-500:] if result.stderr else "Unknown error"
-        except subprocess.TimeoutExpired:
-            apartments_scraper_status["error"] = "Apartments scraper timed out after 1 hour"
-            apartments_scraper_status["last_result"] = {
-                "success": False,
-                "error": "Timeout",
-                "stdout": "",
-                "stderr": "Scraper timed out after 1 hour",
-                "returncode": -1
-            }
-        except Exception as e:
-            apartments_scraper_status["error"] = str(e)
-            apartments_scraper_status["last_result"] = {
-                "success": False,
-                "error": str(e),
-                "stdout": "",
-                "stderr": str(e),
-                "returncode": -1
-            }
-        finally:
-            apartments_scraper_status["running"] = False
-    
-    # Start scraper in background thread
-    thread = threading.Thread(target=execute_apartments_scraper, args=(city,))
+    thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
     
-    return jsonify({
-        "message": "Apartments scraper started",
-        "started_at": apartments_scraper_status["last_run"],
-        "city": city,
-        "note": "Scraper will automatically upload results to Supabase"
-    })
+    return jsonify({"message": "FSBO scraper started"})
 
-@app.route('/api/trigger-apartments', methods=['GET'])
-def trigger_apartments_scraper_get():
-    """Trigger the apartments scraper via GET (for easy testing)"""
-    return trigger_apartments_scraper()
+@app.route('/api/trigger-apartments', methods=['POST', 'GET'])
+def trigger_apartments():
+    if apartments_scraper_status["running"]:
+        return jsonify({"error": "Apartments Scraper is already running"}), 400
+    
+    city = request.args.get("city", "chicago-il")
+    
+    def worker():
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        scraper_dir = os.path.join(base_dir, "Apartments_Scraper")
+        run_process_with_logging(
+             [sys.executable, "-m", "scrapy", "crawl", "apartments_frbo", "-a", f"city={city}"],
+             scraper_dir,
+             "Apartments",
+             apartments_scraper_status
+        )
+
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"message": "Apartments scraper started"})
 
 @app.route('/api/status-apartments', methods=['GET'])
 def get_apartments_status():
-    """Get apartments scraper status"""
     return jsonify({
         "status": "running" if apartments_scraper_status["running"] else "idle",
         "last_run": apartments_scraper_status["last_run"],
-        "last_result": apartments_scraper_status["last_result"],
-        "error": apartments_scraper_status["error"],
-        "timestamp": datetime.now().isoformat()
+        "error": apartments_scraper_status["error"]
     })
 
-# ============================================================
-# Zillow FSBO Scraper
-# ============================================================
-@app.route('/api/trigger-zillow-fsbo', methods=['GET', 'POST'])
+@app.route('/api/trigger-zillow-fsbo', methods=['POST', 'GET'])
 def trigger_zillow_fsbo():
-    """Trigger the Zillow FSBO scraper"""
-    global zillow_fsbo_status
-    
     if zillow_fsbo_status["running"]:
-        return jsonify({"error": "Zillow FSBO scraper is already running"}), 400
-    
-    # Get URL from request
-    start_url = None
-    if request.is_json and request.json:
-        start_url = request.json.get("url")
-    elif request.args:
-        start_url = request.args.get("url")
-    
-    zillow_fsbo_status["running"] = True
-    zillow_fsbo_status["error"] = None
-    zillow_fsbo_status["last_run"] = datetime.now().isoformat()
-    
-    def execute_zillow_fsbo(url_param):
-        try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            scraper_dir = os.path.join(base_dir, "Zillow_FSBO_Scraper")
-            
-            if not os.path.exists(scraper_dir):
-                zillow_fsbo_status["error"] = f"Directory not found: {scraper_dir}"
-                zillow_fsbo_status["last_result"] = {"success": False, "error": zillow_fsbo_status["error"]}
-                zillow_fsbo_status["running"] = False
-                return
-            
-            cmd = [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"]
-            if url_param:
-                cmd.extend(["-a", f"start_url={url_param}"])
-            
-            result = subprocess.run(
-                cmd,
-                cwd=scraper_dir,
-                capture_output=True,
-                text=True,
-                timeout=3600
-            )
-            
-            zillow_fsbo_status["last_result"] = {
-                "success": result.returncode == 0,
-                "stdout": result.stdout[-1000:] if result.stdout else "",
-                "stderr": result.stderr[-1000:] if result.stderr else "",
-                "returncode": result.returncode
-            }
-            
-            if result.returncode != 0:
-                zillow_fsbo_status["error"] = result.stderr[-500:] if result.stderr else "Unknown error"
-        except subprocess.TimeoutExpired:
-            zillow_fsbo_status["error"] = "Scraper timed out after 1 hour"
-            zillow_fsbo_status["last_result"] = {"success": False, "error": "Timeout"}
-        except Exception as e:
-            zillow_fsbo_status["error"] = str(e)
-            zillow_fsbo_status["last_result"] = {"success": False, "error": str(e)}
-        finally:
-            zillow_fsbo_status["running"] = False
-    
-    thread = threading.Thread(target=execute_zillow_fsbo, args=(start_url,))
+         return jsonify({"error": "Zillow FSBO Scraper is already running"}), 400
+         
+    url = request.args.get("url")
+    cmd = [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"]
+    if url:
+        cmd.extend(["-a", f"start_url={url}"])
+        
+    def worker():
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        scraper_dir = os.path.join(base_dir, "Zillow_FSBO_Scraper")
+        run_process_with_logging(cmd, scraper_dir, "Zillow_FSBO", zillow_fsbo_status)
+        
+    thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
     
-    return jsonify({
-        "message": "Zillow FSBO scraper started",
-        "started_at": zillow_fsbo_status["last_run"],
-        "url_used": start_url or "Default"
-    })
+    return jsonify({"message": "Zillow FSBO scraper started"})
 
 @app.route('/api/status-zillow-fsbo', methods=['GET'])
 def get_zillow_fsbo_status():
-    """Get Zillow FSBO scraper status"""
     return jsonify({
         "status": "running" if zillow_fsbo_status["running"] else "idle",
         "last_run": zillow_fsbo_status["last_run"],
-        "last_result": zillow_fsbo_status["last_result"],
-        "error": zillow_fsbo_status["error"],
-        "timestamp": datetime.now().isoformat()
+        "error": zillow_fsbo_status["error"]
     })
 
-# ============================================================
-# Zillow FRBO Scraper
-# ============================================================
-@app.route('/api/trigger-zillow-frbo', methods=['GET', 'POST'])
+@app.route('/api/trigger-zillow-frbo', methods=['POST', 'GET'])
 def trigger_zillow_frbo():
-    """Trigger the Zillow FRBO scraper"""
-    global zillow_frbo_status
-    
     if zillow_frbo_status["running"]:
-        return jsonify({"error": "Zillow FRBO scraper is already running"}), 400
-    
-    # Get URL from request
-    start_url = None
-    if request.is_json and request.json:
-        start_url = request.json.get("url")
-    elif request.args:
-        start_url = request.args.get("url")
-    
-    zillow_frbo_status["running"] = True
-    zillow_frbo_status["error"] = None
-    zillow_frbo_status["last_run"] = datetime.now().isoformat()
-    
-    def execute_zillow_frbo(url_param):
-        try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            scraper_dir = os.path.join(base_dir, "Zillow_FRBO_Scraper")
-            
-            if not os.path.exists(scraper_dir):
-                zillow_frbo_status["error"] = f"Directory not found: {scraper_dir}"
-                zillow_frbo_status["last_result"] = {"success": False, "error": zillow_frbo_status["error"]}
-                zillow_frbo_status["running"] = False
-                return
-            
-            cmd = [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"]
-            if url_param:
-                cmd.extend(["-a", f"start_url={url_param}"])
-            
-            proc = subprocess.Popen(
-                cmd,
-                cwd=scraper_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            # Register process
-            active_processes['zillow_frbo'] = proc
-            
-            stdout, stderr = proc.communicate(timeout=3600)
-            
-            # Unregister
-            if 'zillow_frbo' in active_processes:
-                del active_processes['zillow_frbo']
-            
-            zillow_frbo_status["last_result"] = {
-                "success": proc.returncode == 0,
-                "stdout": stdout[-1000:] if stdout else "",
-                "stderr": stderr[-1000:] if stderr else "",
-                "returncode": proc.returncode
-            }
-            
-            if proc.returncode != 0:
-                zillow_frbo_status["error"] = stderr[-500:] if stderr else "Unknown error"
-            
-            # Check if was stopped manually (returncode might be non-zero or specific signal)
-            if proc.returncode != 0 and "Terminated" in (stderr or ""):
-                 zillow_frbo_status["last_result"]["error"] = "Stopped by user"
-            
-        except subprocess.TimeoutExpired:
-            # If timeout, terminate the process
-            if 'zillow_frbo' in active_processes:
-                active_processes['zillow_frbo'].terminate()
-                del active_processes['zillow_frbo']
-            zillow_frbo_status["error"] = "Scraper timed out after 1 hour"
-            zillow_frbo_status["last_result"] = {"success": False, "error": "Timeout"}
-        except Exception as e:
-            if 'zillow_frbo' in active_processes:
-                del active_processes['zillow_frbo']
-            zillow_frbo_status["error"] = str(e)
-            zillow_frbo_status["last_result"] = {"success": False, "error": str(e)}
-        finally:
-            zillow_frbo_status["running"] = False
-    
-    thread = threading.Thread(target=execute_zillow_frbo, args=(start_url,))
+         return jsonify({"error": "Zillow FRBO Scraper is already running"}), 400
+         
+    url = request.args.get("url")
+    cmd = [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"]
+    if url:
+        cmd.extend(["-a", f"start_url={url}"])
+        
+    def worker():
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        scraper_dir = os.path.join(base_dir, "Zillow_FRBO_Scraper")
+        run_process_with_logging(cmd, scraper_dir, "Zillow_FRBO", zillow_frbo_status)
+        
+    thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
     
-    return jsonify({
-        "message": "Zillow FRBO scraper started",
-        "started_at": zillow_frbo_status["last_run"],
-        "url_used": start_url or "Default"
-    })
+    return jsonify({"message": "Zillow FRBO scraper started"})
 
 @app.route('/api/status-zillow-frbo', methods=['GET'])
 def get_zillow_frbo_status():
-    """Get Zillow FRBO scraper status"""
     return jsonify({
         "status": "running" if zillow_frbo_status["running"] else "idle",
         "last_run": zillow_frbo_status["last_run"],
-        "last_result": zillow_frbo_status["last_result"],
-        "error": zillow_frbo_status["error"],
-        "timestamp": datetime.now().isoformat()
+        "error": zillow_frbo_status["error"]
     })
 
-# ============================================================
-# Hotpads Scraper
-# ============================================================
-@app.route('/api/trigger-hotpads', methods=['GET', 'POST'])
+@app.route('/api/trigger-hotpads', methods=['POST', 'GET'])
 def trigger_hotpads():
-    """Trigger the Hotpads scraper"""
-    global hotpads_status
-    
     if hotpads_status["running"]:
-        return jsonify({"error": "Hotpads scraper is already running"}), 400
-    
-    hotpads_status["running"] = True
-    hotpads_status["error"] = None
-    hotpads_status["last_run"] = datetime.now().isoformat()
-    
-    def execute_hotpads():
-        try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            scraper_dir = os.path.join(base_dir, "Hotpads_Scraper")
-            
-            if not os.path.exists(scraper_dir):
-                hotpads_status["error"] = f"Directory not found: {scraper_dir}"
-                hotpads_status["last_result"] = {"success": False, "error": hotpads_status["error"]}
-                hotpads_status["running"] = False
-                return
-            
-            result = subprocess.run(
-                [sys.executable, "-m", "scrapy", "crawl", "hotpads_scraper"],
-                cwd=scraper_dir,
-                capture_output=True,
-                text=True,
-                timeout=3600
-            )
-            
-            hotpads_status["last_result"] = {
-                "success": result.returncode == 0,
-                "stdout": result.stdout[-1000:] if result.stdout else "",
-                "stderr": result.stderr[-1000:] if result.stderr else "",
-                "returncode": result.returncode
-            }
-            
-            if result.returncode != 0:
-                hotpads_status["error"] = result.stderr[-500:] if result.stderr else "Unknown error"
-        except subprocess.TimeoutExpired:
-            hotpads_status["error"] = "Scraper timed out after 1 hour"
-            hotpads_status["last_result"] = {"success": False, "error": "Timeout"}
-        except Exception as e:
-            hotpads_status["error"] = str(e)
-            hotpads_status["last_result"] = {"success": False, "error": str(e)}
-        finally:
-            hotpads_status["running"] = False
-    
-    thread = threading.Thread(target=execute_hotpads)
+        return jsonify({"error": "Hotpads Scraper is already running"}), 400
+        
+    def worker():
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        scraper_dir = os.path.join(base_dir, "Hotpads_Scraper")
+        run_process_with_logging(
+            [sys.executable, "-m", "scrapy", "crawl", "hotpads_scraper"], 
+            scraper_dir, 
+            "Hotpads", 
+            hotpads_status
+        )
+        
+    thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
     
-    return jsonify({
-        "message": "Hotpads scraper started",
-        "started_at": hotpads_status["last_run"]
-    })
+    return jsonify({"message": "Hotpads scraper started"})
 
 @app.route('/api/status-hotpads', methods=['GET'])
 def get_hotpads_status():
-    """Get Hotpads scraper status"""
     return jsonify({
         "status": "running" if hotpads_status["running"] else "idle",
         "last_run": hotpads_status["last_run"],
-        "last_result": hotpads_status["last_result"],
-        "error": hotpads_status["error"],
-        "timestamp": datetime.now().isoformat()
+        "error": hotpads_status["error"]
     })
 
-# ============================================================
-# Run All Scrapers (Sequential)
-# ============================================================
-@app.route('/api/trigger-all', methods=['GET', 'POST'])
-def trigger_all_scrapers():
-    """Trigger ALL scrapers sequentially"""
+@app.route('/api/trigger-all', methods=['POST', 'GET'])
+def trigger_all():
     global all_scrapers_status
-    
     if all_scrapers_status["running"]:
-        return jsonify({
-            "error": "All scrapers job is already running",
-            "current_scraper": all_scrapers_status["current_scraper"]
-        }), 400
-    
-    all_scrapers_status["running"] = True
-    all_scrapers_status["error"] = None
-    all_scrapers_status["last_run"] = datetime.now().isoformat()
-    all_scrapers_status["current_scraper"] = None
-    all_scrapers_status["completed"] = []
-    
-    def execute_all_scrapers():
+        return jsonify({"error": "All Scrapers job is already running"}), 400
+        
+    def execute_all():
+        all_scrapers_status["running"] = True
+        all_scrapers_status["error"] = None
+        all_scrapers_status["last_run"] = datetime.now().isoformat()
+        add_log("🚀 Starting ALL scrapers sequentially...", "info")
+        
         base_dir = os.path.dirname(os.path.abspath(__file__))
         
         scrapers = [
-            {"name": "fsbo", "cmd": [sys.executable, "forsalebyowner_selenium_scraper.py"], "cwd": base_dir},
-            {"name": "apartments", "cmd": [sys.executable, "-m", "scrapy", "crawl", "apartments_frbo"], "cwd": os.path.join(base_dir, "Apartments_Scraper")},
-            {"name": "zillow_fsbo", "cmd": [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"], "cwd": os.path.join(base_dir, "Zillow_FSBO_Scraper")},
-            {"name": "zillow_frbo", "cmd": [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"], "cwd": os.path.join(base_dir, "Zillow_FRBO_Scraper")},
-            {"name": "hotpads", "cmd": [sys.executable, "-m", "scrapy", "crawl", "hotpads_scraper"], "cwd": os.path.join(base_dir, "Hotpads_Scraper")}
+            ("FSBO", [sys.executable, "forsalebyowner_selenium_scraper.py"], base_dir, scraper_status),
+            ("Apartments", [sys.executable, "-m", "scrapy", "crawl", "apartments_frbo"], os.path.join(base_dir, "Apartments_Scraper"), apartments_scraper_status),
+            ("Zillow_FSBO", [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"], os.path.join(base_dir, "Zillow_FSBO_Scraper"), zillow_fsbo_status),
+            ("Zillow_FRBO", [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"], os.path.join(base_dir, "Zillow_FRBO_Scraper"), zillow_frbo_status),
+            ("Hotpads", [sys.executable, "-m", "scrapy", "crawl", "hotpads_scraper"], os.path.join(base_dir, "Hotpads_Scraper"), hotpads_status),
         ]
         
-        for scraper in scrapers:
-            try:
-                all_scrapers_status["current_scraper"] = scraper["name"]
+        for name, cmd, cwd, status_dict in scrapers:
+            all_scrapers_status["current_scraper"] = name
+            add_log(f"--- Queue: Starting {name} ---", "info")
+            
+            # Run the scraper
+            success = run_process_with_logging(cmd, cwd, name, status_dict)
+            
+            if not success:
+                add_log(f"⚠️ {name} failed, but continuing with next scraper...", "error")
+            else:
+                add_log(f"✅ {name} finished successfully.", "success")
                 
-                if not os.path.exists(scraper["cwd"]):
-                    all_scrapers_status["completed"].append({
-                        "name": scraper["name"],
-                        "success": False,
-                        "error": f"Directory not found: {scraper['cwd']}"
-                    })
-                    continue
-                
-                result = subprocess.run(
-                    scraper["cmd"],
-                    cwd=scraper["cwd"],
-                    capture_output=True,
-                    text=True,
-                    timeout=3600
-                )
-                
-                all_scrapers_status["completed"].append({
-                    "name": scraper["name"],
-                    "success": result.returncode == 0,
-                    "returncode": result.returncode
-                })
-                
-            except subprocess.TimeoutExpired:
-                all_scrapers_status["completed"].append({
-                    "name": scraper["name"],
-                    "success": False,
-                    "error": "Timeout after 1 hour"
-                })
-            except Exception as e:
-                all_scrapers_status["completed"].append({
-                    "name": scraper["name"],
-                    "success": False,
-                    "error": str(e)
-                })
-        
-        all_scrapers_status["current_scraper"] = None
+            time.sleep(2) # Brief pause between scrapers
+            
         all_scrapers_status["running"] = False
-    
-    thread = threading.Thread(target=execute_all_scrapers)
+        all_scrapers_status["current_scraper"] = None
+        add_log("🎉 ALL scrapers finished execution.", "success")
+
+    thread = threading.Thread(target=execute_all)
     thread.daemon = True
     thread.start()
     
-    return jsonify({
-        "message": "All scrapers started (running sequentially)",
-        "started_at": all_scrapers_status["last_run"],
-        "scrapers": ["fsbo", "apartments", "zillow_fsbo", "zillow_frbo", "hotpads"]
-    })
+    return jsonify({"message": "Started sequential run of all scrapers"})
 
 @app.route('/api/status-all', methods=['GET'])
 def get_all_status():
-    """Get status of all scrapers"""
     return jsonify({
         "all_scrapers": {
             "running": all_scrapers_status["running"],
             "last_run": all_scrapers_status["last_run"],
-            "current_scraper": all_scrapers_status["current_scraper"],
-            "completed": all_scrapers_status["completed"]
+            "current_scraper": all_scrapers_status["current_scraper"]
         },
-        "fsbo": {
-            "status": "running" if scraper_status["running"] else "idle",
-            "last_run": scraper_status["last_run"]
-        },
-        "apartments": {
-            "status": "running" if apartments_scraper_status["running"] else "idle",
-            "last_run": apartments_scraper_status["last_run"]
-        },
-        "zillow_fsbo": {
-            "status": "running" if zillow_fsbo_status["running"] else "idle",
-            "last_run": zillow_fsbo_status["last_run"]
-        },
-        "zillow_frbo": {
-            "status": "running" if zillow_frbo_status["running"] else "idle",
-            "last_run": zillow_frbo_status["last_run"]
-        },
-        "hotpads": {
-            "status": "running" if hotpads_status["running"] else "idle",
-            "last_run": hotpads_status["last_run"]
-        },
-        "timestamp": datetime.now().isoformat()
+        "fsbo": { "status": "running" if scraper_status["running"] else "idle", "last_run": scraper_status["last_run"] },
+        "apartments": { "status": "running" if apartments_scraper_status["running"] else "idle", "last_run": apartments_scraper_status["last_run"] },
+        "zillow_fsbo": { "status": "running" if zillow_fsbo_status["running"] else "idle", "last_run": zillow_fsbo_status["last_run"] },
+        "zillow_frbo": { "status": "running" if zillow_frbo_status["running"] else "idle", "last_run": zillow_frbo_status["last_run"] },
+        "hotpads": { "status": "running" if hotpads_status["running"] else "idle", "last_run": hotpads_status["last_run"] },
     })
 
 @app.route('/api/stop-scraper', methods=['GET', 'POST'])
 def stop_scraper():
-    """Stop a running scraper by ID"""
-    scraper_id = request.args.get('id') or (request.json.get('id') if request.is_json else None)
+    id = request.args.get('id')
+    if not id:
+        return jsonify({"error": "Missing id"}), 400
     
-    if not scraper_id:
-        return jsonify({"error": "Missing scraper id"}), 400
-        
-    proc = active_processes.get(scraper_id)
-    if proc:
-        try:
-            proc.terminate()
-            # Wait a bit or let communicate handle it
-            return jsonify({"message": f"Scraper {scraper_id} stopping..."})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-    else:
-        return jsonify({"error": "Scraper not running"}), 404
+    # Map friendly IDs to internal names
+    id_map = {
+        "fsbo": "FSBO",
+        "apartments": "Apartments",
+        "zillow_fsbo": "Zillow_FSBO",
+        "zillow_frbo": "Zillow_FRBO",
+        "hotpads": "Hotpads"
+    }
+    
+    internal_name = id_map.get(id, id)
+    
+    if internal_name in active_processes:
+        add_log(f"Stopping {internal_name} requested by user...", "info")
+        ensure_process_killed(internal_name)
+        return jsonify({"message": f"Stopped {internal_name}"})
+    
+    return jsonify({"error": "Scraper not running"}), 404
 
 if __name__ == '__main__':
-    # Get port from environment variable or use default 8080
     port = int(os.environ.get('PORT', 8080))
-    # Run on 0.0.0.0 to accept connections from outside
     app.run(host='0.0.0.0', port=port, debug=False)
