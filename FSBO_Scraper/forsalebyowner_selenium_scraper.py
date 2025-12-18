@@ -1410,11 +1410,14 @@ class ForSaleByOwnerSeleniumScraper:
             
             # Extract beds - FIXED for website format: "$665,0004 Beds" (no space before number)
             # Card text format: "4557 South Calumet AvenueChicago, IL 60653$665,0004 Beds4 Baths"
+            # Extract beds - FIXED for website format: "$665,0004 Beds" (no space before number)
+            # Card text format: "4557 South Calumet AvenueChicago, IL 60653$665,0004 Beds4 Baths"
             # Try specific selectors first: <span class="px-2">4 Beds</span>
             beds_selectors = [
-                "span[class*='px-2']",  # Exact: "px-2" class
-                "span[class*='px']",  # Contains "px"
-                "div[class*='text-sm'] span",  # In text-sm div
+                "span.px-2",
+                "span[class*='px-2']",
+                "span[class*='px']",
+                "div[class*='text-sm'] span",
             ]
             
             for selector in beds_selectors:
@@ -1466,11 +1469,14 @@ class ForSaleByOwnerSeleniumScraper:
                     pass
             
             # Extract baths - FIXED for website format: "4 Beds4 Baths" (no space before number)
+            # Extract baths - FIXED for website format: "4 Beds4 Baths" (no space before number)
             # Try specific selectors first: <span class="border-l border-white pl-2">4 Baths</span>
             baths_selectors = [
-                "span[class*='border-l']",  # Has border-l class
-                "span[class*='pl-2']",  # Has pl-2 class
-                "div[class*='text-sm'] span:last-child",  # Last span in text-sm div
+                "span.border-l",
+                "span.pl-2",
+                "span[class*='border-l']",
+                "span[class*='pl-2']",
+                "div[class*='text-sm'] span:last-child",
             ]
             
             for selector in baths_selectors:

@@ -155,16 +155,18 @@ def get_status():
         "error": scraper_status["error"]
     })
 
-@app.route('/api/trigger', methods=['POST', 'GET'])
+@app.route('/api/trigger', methods=['POST'])
 def trigger_scraper():
     """Trigger FSBO scraper"""
     if scraper_status["running"]:
         return jsonify({"error": "FSBO Scraper is already running"}), 400
     
     def worker():
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        scraper_dir = os.path.join(base_dir, "FSBO_Scraper")
         run_process_with_logging(
             [sys.executable, "forsalebyowner_selenium_scraper.py"],
-            os.path.dirname(os.path.abspath(__file__)),
+            scraper_dir,
             "FSBO",
             scraper_status
         )
@@ -206,7 +208,7 @@ def get_apartments_status():
         "error": apartments_scraper_status["error"]
     })
 
-@app.route('/api/trigger-zillow-fsbo', methods=['POST', 'GET'])
+@app.route('/api/trigger-zillow-fsbo', methods=['POST'])
 def trigger_zillow_fsbo():
     if zillow_fsbo_status["running"]:
          return jsonify({"error": "Zillow FSBO Scraper is already running"}), 400
@@ -308,7 +310,7 @@ def trigger_all():
         base_dir = os.path.dirname(os.path.abspath(__file__))
         
         scrapers = [
-            ("FSBO", [sys.executable, "forsalebyowner_selenium_scraper.py"], base_dir, scraper_status),
+            ("FSBO", [sys.executable, "forsalebyowner_selenium_scraper.py"], os.path.join(base_dir, "FSBO_Scraper"), scraper_status),
             ("Apartments", [sys.executable, "-m", "scrapy", "crawl", "apartments_frbo"], os.path.join(base_dir, "Apartments_Scraper"), apartments_scraper_status),
             ("Zillow_FSBO", [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"], os.path.join(base_dir, "Zillow_FSBO_Scraper"), zillow_fsbo_status),
             ("Zillow_FRBO", [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"], os.path.join(base_dir, "Zillow_FRBO_Scraper"), zillow_frbo_status),
@@ -370,11 +372,36 @@ def stop_scraper():
     }
     
     internal_name = id_map.get(id, id)
+    process_found = False
     
     if internal_name in active_processes:
         add_log(f"Stopping {internal_name} requested by user...", "info")
         ensure_process_killed(internal_name)
-        return jsonify({"message": f"Stopped {internal_name}"})
+        process_found = True
+    
+    # Reset status dictionaries even if process handle was missing
+    status_updated = False
+    if id == "fsbo":
+        if scraper_status["running"]: status_updated = True
+        scraper_status["running"] = False
+    elif id == "apartments":
+        if apartments_scraper_status["running"]: status_updated = True
+        apartments_scraper_status["running"] = False
+    elif id == "zillow_fsbo":
+        if zillow_fsbo_status["running"]: status_updated = True
+        zillow_fsbo_status["running"] = False
+    elif id == "zillow_frbo":
+        if zillow_frbo_status["running"]: status_updated = True
+        zillow_frbo_status["running"] = False
+    elif id == "hotpads":
+        if hotpads_status["running"]: status_updated = True
+        hotpads_status["running"] = False
+        
+    if process_found:
+        return jsonify({"message": f"Stopped {internal_name}"}), 200
+    elif status_updated:
+        add_log(f"Reset {internal_name} status (no active process handle found)", "info")
+        return jsonify({"message": f"Reset {internal_name} status"}), 200
     
     return jsonify({"error": "Scraper not running"}), 404
 
