@@ -23,10 +23,13 @@ apartments_scraper_status = {"running": False, "last_run": None, "last_result": 
 zillow_fsbo_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 zillow_frbo_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 hotpads_status = {"running": False, "last_run": None, "last_result": None, "error": None}
+redfin_status = {"running": False, "last_run": None, "last_result": None, "error": None}
+trulia_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 all_scrapers_status = {"running": False, "last_run": None, "last_result": None, "error": None, "current_scraper": None, "completed": []}
 
 # Global process tracker for stopping
 active_processes = {}
+stop_all_requested = False
 
 # Global Log Buffer
 # List of dicts: { "timestamp": iso_str, "message": str, "type": "info"|"error"|"success" }
@@ -41,8 +44,13 @@ def add_log(message, type="info"):
         "type": type
     }
     LOG_BUFFER.append(entry)
-    # Print to server console as well
-    print(f"[{entry['timestamp']}] [{type.upper()}] {message}")
+    # Print to server console as well, handled gracefully for Windows encoding
+    try:
+        print(f"[{entry['timestamp']}] [{type.upper()}] {message}")
+    except UnicodeEncodeError:
+        # Fallback for consoles that don't support special characters/emojis
+        clean_message = message.encode('ascii', 'ignore').decode('ascii')
+        print(f"[{entry['timestamp']}] [{type.upper()}] {clean_message}")
     
     # Keep buffer size manageable
     if len(LOG_BUFFER) > MAX_LOG_SIZE:
@@ -116,15 +124,18 @@ def run_process_with_logging(cmd, cwd, scraper_name, status_dict):
 
 def ensure_process_killed(scraper_name):
     """Kill process if it exists in active_processes"""
-    if scraper_name in active_processes:
+    process = active_processes.get(scraper_name)
+    if process:
         try:
-            active_processes[scraper_name].terminate()
+            process.terminate()
             time.sleep(1)
-            if active_processes[scraper_name].poll() is None:
-                active_processes[scraper_name].kill()
-        except:
-            pass
-        del active_processes[scraper_name]
+            if process.poll() is None:
+                process.kill()
+        except Exception as e:
+            add_log(f"Error terminating {scraper_name}: {str(e)}", "error")
+        
+        # Safely remove from tracker
+        active_processes.pop(scraper_name, None)
 
 # ==================================
 # API ROUTES
@@ -295,13 +306,74 @@ def get_hotpads_status():
         "error": hotpads_status["error"]
     })
 
+@app.route('/api/trigger-redfin', methods=['POST', 'GET'])
+def trigger_redfin():
+    if redfin_status["running"]:
+        return jsonify({"error": "Redfin Scraper is already running"}), 400
+        
+    def worker():
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        scraper_dir = os.path.join(base_dir, "Redfin_Scraper")
+        run_process_with_logging(
+            [sys.executable, "-m", "scrapy", "crawl", "redfin_spider"], 
+            scraper_dir, 
+            "Redfin", 
+            redfin_status
+        )
+        
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"message": "Redfin scraper started"})
+
+@app.route('/api/status-redfin', methods=['GET'])
+def get_redfin_status():
+    return jsonify({
+        "status": "running" if redfin_status["running"] else "idle",
+        "last_run": redfin_status["last_run"],
+        "error": redfin_status["error"]
+    })
+
+@app.route('/api/trigger-trulia', methods=['POST', 'GET'])
+def trigger_trulia():
+    if trulia_status["running"]:
+        return jsonify({"error": "Trulia Scraper is already running"}), 400
+        
+    def worker():
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        scraper_dir = os.path.join(base_dir, "Trulia_Scraper")
+        run_process_with_logging(
+            [sys.executable, "-m", "scrapy", "crawl", "trulia_spider"], 
+            scraper_dir, 
+            "Trulia", 
+            trulia_status
+        )
+        
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"message": "Trulia scraper started"})
+
+@app.route('/api/status-trulia', methods=['GET'])
+def get_trulia_status():
+    return jsonify({
+        "status": "running" if trulia_status["running"] else "idle",
+        "last_run": trulia_status["last_run"],
+        "error": trulia_status["error"]
+    })
+
 @app.route('/api/trigger-all', methods=['POST', 'GET'])
 def trigger_all():
-    global all_scrapers_status
+    global all_scrapers_status, stop_all_requested
     if all_scrapers_status["running"]:
         return jsonify({"error": "All Scrapers job is already running"}), 400
-        
+    
+    stop_all_requested = False
+    
     def execute_all():
+        global stop_all_requested
         all_scrapers_status["running"] = True
         all_scrapers_status["error"] = None
         all_scrapers_status["last_run"] = datetime.now().isoformat()
@@ -315,9 +387,15 @@ def trigger_all():
             ("Zillow_FSBO", [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"], os.path.join(base_dir, "Zillow_FSBO_Scraper"), zillow_fsbo_status),
             ("Zillow_FRBO", [sys.executable, "-m", "scrapy", "crawl", "zillow_spider"], os.path.join(base_dir, "Zillow_FRBO_Scraper"), zillow_frbo_status),
             ("Hotpads", [sys.executable, "-m", "scrapy", "crawl", "hotpads_scraper"], os.path.join(base_dir, "Hotpads_Scraper"), hotpads_status),
+            ("Redfin", [sys.executable, "-m", "scrapy", "crawl", "redfin_spider"], os.path.join(base_dir, "Redfin_Scraper"), redfin_status),
+            ("Trulia", [sys.executable, "-m", "scrapy", "crawl", "trulia_spider"], os.path.join(base_dir, "Trulia_Scraper"), trulia_status),
         ]
         
         for name, cmd, cwd, status_dict in scrapers:
+            if stop_all_requested:
+                add_log("🛑 Stop All requested. Cancelling remaining scrapers.", "warning")
+                break
+                
             all_scrapers_status["current_scraper"] = name
             add_log(f"--- Queue: Starting {name} ---", "info")
             
@@ -328,12 +406,19 @@ def trigger_all():
                 add_log(f"⚠️ {name} failed, but continuing with next scraper...", "error")
             else:
                 add_log(f"✅ {name} finished successfully.", "success")
+            
+            if stop_all_requested:
+                add_log("🛑 Stop All requested. Cancelling remaining scrapers.", "warning")
+                break
                 
             time.sleep(2) # Brief pause between scrapers
             
         all_scrapers_status["running"] = False
         all_scrapers_status["current_scraper"] = None
-        add_log("🎉 ALL scrapers finished execution.", "success")
+        if stop_all_requested:
+             add_log("⏹️ Sequential run stopped by user.", "warning")
+        else:
+             add_log("🎉 ALL scrapers finished execution.", "success")
 
     thread = threading.Thread(target=execute_all)
     thread.daemon = True
@@ -354,6 +439,8 @@ def get_all_status():
         "zillow_fsbo": { "status": "running" if zillow_fsbo_status["running"] else "idle", "last_run": zillow_fsbo_status["last_run"] },
         "zillow_frbo": { "status": "running" if zillow_frbo_status["running"] else "idle", "last_run": zillow_frbo_status["last_run"] },
         "hotpads": { "status": "running" if hotpads_status["running"] else "idle", "last_run": hotpads_status["last_run"] },
+        "redfin": { "status": "running" if redfin_status["running"] else "idle", "last_run": redfin_status["last_run"] },
+        "trulia": { "status": "running" if trulia_status["running"] else "idle", "last_run": trulia_status["last_run"] },
     })
 
 @app.route('/api/stop-scraper', methods=['GET', 'POST'])
@@ -368,7 +455,9 @@ def stop_scraper():
         "apartments": "Apartments",
         "zillow_fsbo": "Zillow_FSBO",
         "zillow_frbo": "Zillow_FRBO",
-        "hotpads": "Hotpads"
+        "hotpads": "Hotpads",
+        "redfin": "Redfin",
+        "trulia": "Trulia"
     }
     
     internal_name = id_map.get(id, id)
@@ -396,6 +485,12 @@ def stop_scraper():
     elif id == "hotpads":
         if hotpads_status["running"]: status_updated = True
         hotpads_status["running"] = False
+    elif id == "redfin":
+        if redfin_status["running"]: status_updated = True
+        redfin_status["running"] = False
+    elif id == "trulia":
+        if trulia_status["running"]: status_updated = True
+        trulia_status["running"] = False
         
     if process_found:
         return jsonify({"message": f"Stopped {internal_name}"}), 200
@@ -404,6 +499,22 @@ def stop_scraper():
         return jsonify({"message": f"Reset {internal_name} status"}), 200
     
     return jsonify({"error": "Scraper not running"}), 404
+
+@app.route('/api/stop-all', methods=['GET', 'POST'])
+def stop_all():
+    global stop_all_requested, all_scrapers_status
+    if not all_scrapers_status["running"]:
+        return jsonify({"error": "No sequential run active"}), 400
+    
+    stop_all_requested = True
+    add_log("🛑 User requested to stop ALL scrapers.", "warning")
+    
+    # Also stop the current active process if any
+    current = all_scrapers_status["current_scraper"]
+    if current and current in active_processes:
+        ensure_process_killed(current)
+        
+    return jsonify({"message": "Stop request received for sequential run"}), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))

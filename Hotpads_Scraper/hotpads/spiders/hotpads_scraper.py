@@ -38,7 +38,6 @@ class HotPadsSpider(scrapy.Spider):
     def __init__(self, *args, **kwargs):
         super(HotPadsSpider, self).__init__(*args, **kwargs)
         self.locations_file = 'input/locations.csv'
-        # Default URL with filters applied
         self.default_url = "https://hotpads.com/lincoln-park-chicago-il/for-rent-by-owner?border=false&isListedByOwner=true&lat=41.8919&listingTypes=rental&lon=-87.6612&z=12"
         # Check if user wants to use CSV instead
         self.use_csv = kwargs.get('use_csv', 'false').lower() == 'true'

@@ -1,0 +1,2 @@
+scrapy crawl redfin_spider
+pause

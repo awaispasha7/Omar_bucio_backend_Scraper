@@ -11,21 +11,18 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
-try:
-    from selenium.webdriver.chrome.service import Service as ChromeService
-    from webdriver_manager.chrome import ChromeDriverManager
-    USE_WEBDRIVER_MANAGER = True
-except ImportError:
-    USE_WEBDRIVER_MANAGER = False
-import json
-import csv
-import time
-import logging
-from typing import Dict, List, Optional
-import re
-from urllib.parse import urljoin
 import requests
 import os
+import logging
+from typing import Optional, Dict, List, Any
+from supabase import create_client, Client
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Load environment variables from project root (Scraper_backend/.env)
+project_root = Path(__file__).resolve().parents[1]
+env_path = project_root / '.env'
+load_dotenv(dotenv_path=env_path)
 
 # Configure logging
 logging.basicConfig(
@@ -34,6 +31,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Configuration constants
+USE_WEBDRIVER_MANAGER = False
 
 class ForSaleByOwnerSeleniumScraper:
     """Selenium-based scraper for ForSaleByOwner.com listings."""
@@ -51,9 +50,20 @@ class ForSaleByOwnerSeleniumScraper:
         self.base_url = base_url
         self.delay = delay
         self.driver = None
-        # API URL for real-time storage (can be set via environment variable)
-        self.api_url = api_url or os.getenv('API_URL', 'http://localhost:3000/api/listings/add')
-        self.real_time_storage = os.getenv('REAL_TIME_STORAGE', 'true').lower() == 'true'
+        # Supabase configuration
+        self.supabase_url = os.getenv("SUPABASE_URL")
+        self.supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+        self.supabase: Optional[Client] = None
+        
+        if self.supabase_url and self.supabase_key:
+            try:
+                self.supabase = create_client(self.supabase_url, self.supabase_key)
+                logger.info(f"Connected to Supabase: {self.supabase_url}")
+            except Exception as e:
+                logger.error(f"Failed to connect to Supabase: {e}")
+        else:
+            logger.warning("Supabase credentials missing in environment variables")
+            
         self.setup_driver(headless)
     
     def setup_driver(self, headless: bool = True):
@@ -227,68 +237,42 @@ class ForSaleByOwnerSeleniumScraper:
         except Exception as e:
             logger.error(f"Error scrolling page: {e}")
     
-    def send_listing_to_api(self, listing_data: Dict) -> bool:
+    def send_listing_to_supabase(self, listing_data: Dict) -> bool:
         """
-        Send a single listing to the API for real-time storage in Supabase.
-        
-        Args:
-            listing_data: Dictionary with listing information
+        Send a single listing directly to Supabase.
+        """
+        if not self.supabase:
+            return False
             
-        Returns:
-            True if successful, False otherwise
-        """
         try:
-            logger.info(f"📤 Sending listing to API: {self.api_url}")
-            logger.info(f"   Address: {listing_data.get('address', 'N/A')[:50]}")
+            # Prepare data for Supabase forsalebyowner_listings table
+            # Map fields to database columns
+            data = {
+                "address": listing_data.get('address'),
+                "price": listing_data.get('price'),
+                "beds": listing_data.get('beds'),
+                "baths": listing_data.get('baths'),
+                "square_feet": listing_data.get('square_feet'),
+                "listing_link": listing_data.get('listing_link'),
+                "time_of_post": listing_data.get('time_of_post'),
+                "scrape_date": time.strftime('%Y-%m-%d')
+            }
             
-            response = requests.post(
-                self.api_url,
-                json=listing_data,
-                headers={'Content-Type': 'application/json'},
-                timeout=10
-            )
+            # Upsert into Supabase (insert or update if listing_link exists)
+            response = self.supabase.table("forsalebyowner_listings").upsert(
+                data, 
+                on_conflict="listing_link"
+            ).execute()
             
-            logger.info(f"📥 API Response: Status {response.status_code}")
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('success'):
-                    action = result.get('action', 'unknown')
-                    if action == 'added':
-                        logger.info(f"💾 ✅ Stored in database (NEW): {listing_data.get('address', 'N/A')[:50]}")
-                    elif action == 'updated':
-                        logger.info(f"💾 ✅ Stored in database (UPDATED): {listing_data.get('address', 'N/A')[:50]}")
-                    elif result.get('skipped'):
-                        logger.info(f"⏭️ Skipped (suburb): {listing_data.get('address', 'N/A')[:50]}")
-                    return True
-                else:
-                    error_msg = result.get('error', 'Unknown error')
-                    logger.error(f"❌ API returned success=false: {error_msg}")
-                    # If it's a database schema error, log it prominently
-                    if 'does not exist' in error_msg or 'table' in error_msg.lower():
-                        logger.error(f"⚠️ DATABASE SCHEMA ERROR: {error_msg}")
-                        logger.error(f"⚠️ Please run supabase_schema.sql in your Supabase SQL Editor")
-                    return False
+            if response.data:
+                logger.info(f"💾 ✅ Saved to Supabase: {listing_data.get('address', 'N/A')[:50]}")
+                return True
             else:
-                error_text = response.text[:500]
-                logger.error(f"❌ API returned status {response.status_code}: {error_text}")
+                logger.error(f"❌ Failed to save to Supabase: {listing_data.get('address', 'N/A')[:50]}")
                 return False
                 
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"❌ Cannot connect to API at {self.api_url}")
-            logger.error(f"   Make sure Next.js server is running on http://localhost:3000")
-            logger.error(f"   Error: {e}")
-            return False
-        except requests.exceptions.Timeout as e:
-            logger.warning(f"⚠️ API request timeout: {e}")
-            return False
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Failed to send listing to API: {e}")
-            return False
         except Exception as e:
-            logger.error(f"❌ Unexpected error sending listing to API: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
+            logger.error(f"❌ Error sending listing to Supabase: {e}")
             return False
     
     def get_already_scraped_urls(self) -> set:
@@ -762,16 +746,14 @@ class ForSaleByOwnerSeleniumScraper:
                         listings.append(listing_data)
                         new_count += 1
                         
-                        # REAL-TIME STORAGE: Send to Supabase immediately as we scrape
-                        if self.real_time_storage:
+                        # REAL-TIME STORAGE: Send to Supabase directly
+                        if self.supabase:
                             try:
-                                success = self.send_listing_to_api(listing_data)
+                                success = self.send_listing_to_supabase(listing_data)
                                 if not success:
-                                    logger.warning(f"⚠️ Failed to store listing in database (will sync later)")
+                                    logger.warning(f"⚠️ Failed to store listing in Supabase")
                             except Exception as e:
-                                logger.error(f"❌ Exception sending listing to API: {e}")
-                                import traceback
-                                logger.debug(traceback.format_exc())
+                                logger.error(f"❌ Exception sending listing to Supabase: {e}")
                         
                         # Log with data completeness
                         data_status = []
@@ -1987,9 +1969,8 @@ def main():
     scraper = None
     try:
         # Initialize scraper (headless=False to see browser, headless=True to run in background)
-        # Enable real-time storage to Supabase as we scrape
-        api_url = os.getenv('API_URL', 'http://localhost:3000/api/listings/add')
-        scraper = ForSaleByOwnerSeleniumScraper(base_url=url, headless=True, delay=2.0, api_url=api_url)
+        # Enable direct Supabase storage
+        scraper = ForSaleByOwnerSeleniumScraper(base_url=url, headless=True, delay=2.0)
         
         # FORCE FULL SCRAPE to get all listings from website
         # Always scrape all listings to ensure we get complete data for sync
