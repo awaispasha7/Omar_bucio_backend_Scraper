@@ -246,7 +246,7 @@ def get_status():
         "error": scraper_status["error"]
     })
 
-@app.route('/api/trigger', methods=['POST'])
+@app.route('/api/trigger', methods=['POST', 'GET'])
 def trigger_scraper():
     """Trigger FSBO scraper"""
     if scraper_status["running"]:
@@ -299,7 +299,7 @@ def get_apartments_status():
         "error": apartments_scraper_status["error"]
     })
 
-@app.route('/api/trigger-zillow-fsbo', methods=['POST'])
+@app.route('/api/trigger-zillow-fsbo', methods=['POST', 'GET'])
 def trigger_zillow_fsbo():
     if zillow_fsbo_status["running"]:
          return jsonify({"error": "Zillow FSBO Scraper is already running"}), 400
