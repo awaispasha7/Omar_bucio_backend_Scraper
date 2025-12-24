@@ -144,13 +144,33 @@ class HotPadsSpider(scrapy.Spider):
                         graph = [data]
                         
                     for item in graph:
-                        if item.get('@type') == 'SearchResultsPage':
-                            # Check mainEntity.itemListElement
-                            if 'mainEntity' in item and 'itemListElement' in item['mainEntity']:
-                                elements = item['mainEntity']['itemListElement']
-                                self.logger.info(f"Found {len(elements)} items in JSON-LD mainEntity")
+                        # Extract from SearchResultsPage, CollectionPage, ItemPage, or any item with 'about'
+                        item_type = item.get('@type', '')
+                        
+                        # Check 'about' (Very common in Hotpads for listing lists)
+                        if 'about' in item:
+                            about_list = item['about']
+                            if not isinstance(about_list, list):
+                                about_list = [about_list]
+                            
+                            self.logger.info(f"Checking {len(about_list)} items in JSON-LD 'about' (Type: {item_type})")
+                            for ab in about_list:
+                                if not isinstance(ab, dict): continue
+                                url = ab.get('url') or ab.get('@id')
+                                if url: listing_urls.append(url)
+                        
+                        # Check mainEntity.itemListElement
+                        if 'mainEntity' in item:
+                            main_entity = item['mainEntity']
+                            if isinstance(main_entity, dict) and 'itemListElement' in main_entity:
+                                elements = main_entity['itemListElement']
+                                if not isinstance(elements, list):
+                                    elements = [elements]
+                                self.logger.info(f"Checking {len(elements)} items in JSON-LD mainEntity.itemListElement")
                                 for el in elements:
-                                    url = el.get('item', {}).get('url')
+                                    if not isinstance(el, dict): continue
+                                    # Handle both direct URLs and item objects
+                                    url = el.get('url') or el.get('item', {}).get('url')
                                     if url: listing_urls.append(url)
                             
                             # Check direct itemListElement
@@ -188,24 +208,37 @@ class HotPadsSpider(scrapy.Spider):
         # Normalize to absolute URLs and FILTER
         raw_urls = listing_urls
         listing_urls = []
+        filtered_out = []
+        
         for url in raw_urls:
+            if not url: continue
             full_url = response.urljoin(url) if not url.startswith('http') else url
             
-            # CRITICAL FILTER: Actual listings usually have 'pad', 'building', or an ID-like slug.
-            # Category search pages like /chicago-il/apartments-for-rent should be skipped.
-            if any(term in full_url for term in ['/pad', '/building', '-sk', '-1ms', '-24', '-xu', '-yy']):
-                # Also exclude certain patterns that are definitely categories
-                if not any(term in full_url for term in ['?lat=', '/rooms-for-rent', '/luxury-apartments']):
-                    listing_urls.append(full_url)
+            # A listing URL on Hotpads usually contains /pad or /building
+            # A search/category URL usually contains terms like -apartments-for-rent, -houses-for-rent, etc.
+            is_listing = any(term in full_url for term in ['/pad', '/building'])
+            # Only count as category if it looks like a search list page
+            is_search = any(term in full_url for term in [
+                '-apartments-for-rent', '-houses-for-rent', '-condos-for-rent', '-townhomes-for-rent',
+                '/luxury-apartments', '/furnished-apartments', '/affordable-apartments', '/rooms-for-rent'
+            ])
+            
+            if is_listing and not is_search:
+                listing_urls.append(full_url)
+            else:
+                filtered_out.append(full_url)
         
         # Remove duplicates
         listing_urls = list(dict.fromkeys(listing_urls))
         self.logger.info(f"Total unique listing URLs found (after filtering): {len(listing_urls)}")
+        
+        if not listing_urls and filtered_out:
+            self.logger.info(f"SAMPLE REJECTED URLS (first 5): {filtered_out[:5]}")
 
         # Record first listing for state update (assuming newest)
         if not self._first_listing_url and listing_urls:
             first_url = listing_urls[0]
-            self._first_listing_url = response.urljoin(first_url) if not first_url.startswith('http') else first_url
+            self._first_listing_url = first_url
 
         # Bulk check existence in Supabase
         existing_urls = set()
@@ -480,12 +513,20 @@ class HotPadsSpider(scrapy.Spider):
         self.logger.debug(f"Price selector 1: {xpath_price}")
         
         if not xpath_price or any(term in xpath_price.lower() for term in ['than', 'similar']):
-            xpath_price = response.xpath("//div[contains(@class, 'Price')]//span[contains(text(), '$')]/text()").get('')
+            xpath_price = response.xpath("//div[@data-name='PriceText']/text()").get('')
             self.logger.debug(f"Price selector 2: {xpath_price}")
+
+        if not xpath_price:
+            xpath_price = response.xpath("//div[contains(@class, 'map-popup-price')]/text()").get('')
+            self.logger.debug(f"Price selector 3: {xpath_price}")
+        
+        if not xpath_price:
+            xpath_price = response.xpath("//div[contains(@class, 'Price')]//span[contains(text(), '$')]/text()").get('')
+            self.logger.debug(f"Price selector 4: {xpath_price}")
         
         if not xpath_price:
             xpath_price = response.xpath("//div[contains(@class, 'ListingCard-price')]/text()").get('')
-            self.logger.debug(f"Price selector 3: {xpath_price}")
+            self.logger.debug(f"Price selector 5: {xpath_price}")
             
         if xpath_price:
             # Extract just the number
