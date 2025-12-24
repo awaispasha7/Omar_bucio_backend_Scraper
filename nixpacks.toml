@@ -3,9 +3,10 @@ nixPkgs = ["python311", "gcc", "stdenv.cc.cc.lib", "curl"]
 
 [phases.install]
 cmds = [
-    "curl -sS https://bootstrap.pypa.io/get-pip.py | python",
-    "python -m pip install -r requirements.txt"
+    "python -m venv .venv",
+    "curl -sS https://bootstrap.pypa.io/get-pip.py | .venv/bin/python",
+    ".venv/bin/pip install -r requirements.txt"
 ]
 
 [start]
-cmd = "python api_server.py"
+cmd = ".venv/bin/python api_server.py"
