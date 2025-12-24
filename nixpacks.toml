@@ -1,20 +1,8 @@
 [phases.setup]
-nixPkgs = ["python311"]
+nixPkgs = ["python311", "gcc", "stdenv.cc.cc.lib"]
 
 [phases.install]
-cmds = [
-  "apt-get update && apt-get install -y curl chromium chromium-driver",
-  "curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py",
-  "python3 get-pip.py --break-system-packages",
-  "python3 -m pip install --upgrade pip --break-system-packages",
-  "python3 -m pip install -r requirements.txt --break-system-packages"
-]
-
-[phases.build]
-cmds = [
-  "python3 -m pip install -r requirements.txt --break-system-packages"
-]
+cmds = ["python -m pip install -r requirements.txt"]
 
 [start]
-cmd = "python3 api_server.py"
-
+cmd = "python api_server.py"
