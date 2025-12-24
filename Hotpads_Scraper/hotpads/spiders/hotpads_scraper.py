@@ -189,16 +189,29 @@ class HotPadsSpider(scrapy.Spider):
         if not listing_urls:
             self.logger.info("JSON-LD yielded no URLs, trying XPath selectors...")
             
-            # Try styles__li (verified in debug)
+            # Diagnostic: Log Title
+            title = response.xpath("//title/text()").get('')
+            self.logger.info(f"PAGE TITLE: {title}")
+            if any(term in title for term in ["Pardon", "Robot", "Access Denied"]):
+                self.logger.error("🚫 CAPTCHA OR BLOCK DETECTED in response title")
+            
+            # Broader Card Selectors
+            # 1. Standard styles__li
             records = response.xpath("//li[contains(@class, 'styles__li')]")
+            # 2. article or div with ListingCard
             if not records:
-                records = response.xpath("//div[contains(@class, 'ListingCard')]")
+                 records = response.xpath("//article[contains(@class, 'ListingCard')] | //div[contains(@class, 'ListingCard')]")
+            # 3. data-test indicators
+            if not records:
+                records = response.xpath("//article[@data-test='listing-card'] | //div[@data-test='listing-card']")
+            # 4. Generic fallback (last resort)
             if not records:
                 records = response.xpath("//li[.//a[contains(@href, '/chicago-il/') or contains(@href, '-il/')]]")
 
-            self.logger.info(f"Found {len(records)} listing records via XPath")
+            self.logger.info(f"Found {len(records)} potential listing records via XPath")
 
             for record in records:
+                # Try to find the link within the card
                 url = record.xpath(".//a[contains(@href, '/')]//@href").get('')
                 if not url:
                     url = record.xpath("./ancestor-or-self::a/@href").get('')
@@ -230,10 +243,9 @@ class HotPadsSpider(scrapy.Spider):
         
         # Remove duplicates
         listing_urls = list(dict.fromkeys(listing_urls))
-        self.logger.info(f"Total unique listing URLs found (after filtering): {len(listing_urls)}")
-        
         if not listing_urls and filtered_out:
-            self.logger.info(f"SAMPLE REJECTED URLS (first 5): {filtered_out[:5]}")
+            self.logger.info(f"Total raw URLs found: {len(raw_urls)}")
+            self.logger.info(f"SAMPLE REJECTED URLS (first 10): {filtered_out[:10]}")
 
         # Record first listing for state update (assuming newest)
         if not self._first_listing_url and listing_urls:
