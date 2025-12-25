@@ -12,6 +12,16 @@ class ApartmentsPipeline:
     def process_item(self, item, spider):
         return item
 
+import sys
+from pathlib import Path
+
+# Add Scraper_backend to sys.path to import utils
+backend_root = Path(__file__).resolve().parents[2]
+if str(backend_root) not in sys.path:
+    sys.path.append(str(backend_root))
+
+from utils.enrichment_manager import EnrichmentManager
+
 
 class ImmediateCsvPipeline:
     """
@@ -182,9 +192,10 @@ class SupabasePipeline:
     """
     
     def __init__(self):
-        self.supabase_client = None
         self.enabled = False
         self.table_name = "apartments_frbo_chicago"
+        self.supabase_client = None
+        self.enrichment_manager = None
         self.upload_count = 0
         self.error_count = 0
         self.batch = []
@@ -284,8 +295,9 @@ class SupabasePipeline:
             # Create Supabase client
             try:
                 self.supabase_client = create_client(supabase_url, supabase_key)
+                self.enrichment_manager = EnrichmentManager(self.supabase_client)
                 self.enabled = True
-                spider.logger.info(f"✅ Supabase pipeline enabled - connected to {supabase_url}")
+                spider.logger.info(f"✅ Supabase pipeline and EnrichmentManager enabled")
                 spider.logger.info(f"📊 Table: {self.table_name}")
             except Exception as e:
                 spider.logger.warning(f"⚠️  Failed to connect to Supabase: {e}. Supabase pipeline disabled.")
@@ -338,13 +350,23 @@ class SupabasePipeline:
             result = self.supabase_client.table(self.table_name).upsert(
                 self.batch,
                 on_conflict="listing_url"
-            ).execute()
-            
-            batch_count = len(self.batch)
-            self.upload_count += batch_count
-            self.batch = []  # Clear batch after successful upload
-            
             spider.logger.debug(f"📤 Uploaded {batch_count} items to Supabase (total: {self.upload_count})")
+            
+            # Enrichment Integration
+            if self.enrichment_manager:
+                for item_data in self.batch:
+                    try:
+                        enrichment_data = {
+                            "address": item_data.get("full_address"),
+                            "owner_name": item_data.get("owner_name"),
+                            "owner_email": item_data.get("owner_email"),
+                            "owner_phone": item_data.get("phone_numbers"),
+                        }
+                        address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Apartments")
+                        if address_hash:
+                            self.supabase_client.table(self.table_name).update({"address_hash": address_hash}).eq("listing_url", item_data.get("listing_url")).execute()
+                    except Exception as e:
+                        spider.logger.error(f"❌ ENRICHMENT ERROR: {e}")
             
         except Exception as e:
             self.error_count += len(self.batch)

@@ -13,6 +13,11 @@ SUPABASE_KEY=your_supabase_service_role_key
 ATTOM_API_KEY=your_attom_api_key
 MELISSA_API_KEY=your_melissa_api_key
 
+# BatchData Configuration (Owner Enrichment)
+BATCHDATA_API_KEY=your_batchdata_api_key
+BATCHDATA_ENABLED=true
+BATCHDATA_DAILY_LIMIT=50
+
 # Frontend API URL (for scraper to send data)
 API_URL=https://scraperfrontend-production.up.railway.app/api/listings/add
 

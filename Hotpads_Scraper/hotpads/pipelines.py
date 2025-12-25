@@ -1,9 +1,18 @@
-import os
 from supabase import create_client, Client
+import sys
+from pathlib import Path
+
+# Add Scraper_backend to sys.path to import utils
+backend_root = Path(__file__).resolve().parents[2]
+if str(backend_root) not in sys.path:
+    sys.path.append(str(backend_root))
+
+from utils.enrichment_manager import EnrichmentManager
 
 class HotpadsPipeline:
     def __init__(self):
         self.supabase: Client = None
+        self.enrichment_manager = None
         self.items_buffer = []
         self.BATCH_SIZE = 1
 
@@ -15,14 +24,15 @@ class HotpadsPipeline:
         if url and key:
             try:
                 self.supabase = create_client(url, key)
+                self.enrichment_manager = EnrichmentManager(self.supabase)
                 # Test connection
                 test = self.supabase.table("hotpads_listings").select("count", count="exact").limit(0).execute()
-                spider.logger.info(f"SUPABASE: Connected successfully to {url}")
+                spider.logger.info(f"SUPABASE: Connected successfully and initialized EnrichmentManager")
                 spider.logger.info(f"SUPABASE: Current record count: {test.count}")
-                spider.logger.info(f"SUPABASE: Batch size: {self.BATCH_SIZE} items")
             except Exception as e:
-                spider.logger.error(f"SUPABASE ERROR: Failed to connect - {e}")
+                spider.logger.error(f"SUPABASE ERROR: Failed to connect or initialize EnrichmentManager - {e}")
                 self.supabase = None
+                self.enrichment_manager = None
         else:
             spider.logger.error("SUPABASE ERROR: Credentials missing in environment")
             spider.logger.error(f"  SUPABASE_URL: {'SET' if url else 'NOT SET'}")
@@ -88,6 +98,26 @@ class HotpadsPipeline:
             self.supabase.table("hotpads_listings").upsert(self.items_buffer, on_conflict="url").execute()
             spider.logger.info("=" * 60)
             spider.logger.info(f"SUPABASE BATCH SAVED: {len(self.items_buffer)} items written to database")
+            
+            # Enrichment Integration
+            if self.enrichment_manager:
+                for item_data in self.items_buffer:
+                    try:
+                        # Map Hotpads fields to generic enrichment fields
+                        enrichment_data = {
+                            "address": item_data.get("address"),
+                            "owner_name": item_data.get("contact_name"),
+                            "owner_email": item_data.get("email"),
+                            "owner_phone": item_data.get("phone_number"),
+                        }
+                        address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Hotpads")
+                        if address_hash:
+                            # Update the item in the buffer with address_hash? 
+                            # Better to update DB directly since we just flushed
+                            self.supabase.table("hotpads_listings").update({"address_hash": address_hash}).eq("url", item_data.get("url")).execute()
+                    except Exception as e:
+                        spider.logger.error(f"ENRICHMENT ERROR: {e}")
+
             spider.logger.info("=" * 60)
             self.items_buffer = []
         except Exception as e:

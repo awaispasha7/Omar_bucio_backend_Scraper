@@ -11,12 +11,23 @@ from pathlib import Path
 from itemadapter import ItemAdapter
 from dotenv import load_dotenv
 
-# Try to import supabase
 try:
     from supabase import create_client, Client
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
+
+import sys
+# Add Scraper_backend to sys.path to import utils
+backend_root = Path(__file__).resolve().parents[2]
+if str(backend_root) not in sys.path:
+    sys.path.append(str(backend_root))
+
+try:
+    from utils.enrichment_manager import EnrichmentManager
+    ENRICHMENT_AVAILABLE = True
+except ImportError:
+    ENRICHMENT_AVAILABLE = False
 
 
 class RedfinScraperPipeline:
@@ -25,6 +36,7 @@ class RedfinScraperPipeline:
         self.csv_file = None
         self.writer = None
         self.supabase = None
+        self.enrichment_manager = None
         self.fieldnames = [
             'Name',
             'Beds / Baths',
@@ -62,7 +74,9 @@ class RedfinScraperPipeline:
             
             if SUPABASE_URL and SUPABASE_KEY:
                 self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-                print("Supabase connection initialized successfully")
+                if ENRICHMENT_AVAILABLE:
+                    self.enrichment_manager = EnrichmentManager(self.supabase)
+                print("Supabase connection and EnrichmentManager initialized successfully")
             else:
                 print("Warning: Supabase credentials not found. Data will only be saved to CSV.")
         except Exception as e:
@@ -128,6 +142,22 @@ class RedfinScraperPipeline:
             if result.data:
                 inserted_id = result.data[0].get('id', 'N/A')
                 spider.logger.info(f"Uploaded to Supabase (ID: {inserted_id}): {record.get('address', 'N/A')}")
+                
+                # Enrichment Integration
+                if self.enrichment_manager:
+                    try:
+                        enrichment_data = {
+                            "address": record.get('address'),
+                            "owner_name": record.get('owner_name'),
+                            "owner_email": record.get('emails'),
+                            "owner_phone": record.get('phones'),
+                        }
+                        address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Redfin")
+                        if address_hash:
+                            self.supabase.table('redfin_listings').update({"address_hash": address_hash}).eq("listing_link", record.get("listing_link")).execute()
+                    except Exception as e:
+                        spider.logger.error(f"Error in EnrichmentManager: {e}")
+                        
                 return True
             else:
                 spider.logger.warning(f"Failed to upload to Supabase: {record.get('address', 'N/A')}")

@@ -1,7 +1,15 @@
+from supabase import create_client, Client
+import sys
 import os
 from pathlib import Path
-from supabase import create_client, Client
 from dotenv import load_dotenv
+
+# Add Scraper_backend to sys.path to import utils
+backend_root = Path(__file__).resolve().parents[2]
+if str(backend_root) not in sys.path:
+    sys.path.append(str(backend_root))
+
+from utils.enrichment_manager import EnrichmentManager
 
 # Load environment variables from project root (Scraper_backend/.env)
 project_root = Path(__file__).resolve().parents[2]  # Go up to Scraper_backend
@@ -11,6 +19,7 @@ load_dotenv(dotenv_path=env_path)
 class SupabasePipeline:
     def __init__(self):
         self.supabase: Client = None
+        self.enrichment_manager = None
         
     def open_spider(self, spider):
         """Initialize Supabase client when spider opens"""
@@ -22,7 +31,8 @@ class SupabasePipeline:
             return
             
         self.supabase = create_client(url, key)
-        spider.logger.info("Supabase client initialized successfully")
+        self.enrichment_manager = EnrichmentManager(self.supabase)
+        spider.logger.info("Supabase client and EnrichmentManager initialized successfully")
     
     def process_item(self, item, spider):
         """Upload item to Supabase"""
@@ -47,13 +57,22 @@ class SupabasePipeline:
                 "phone_number": item.get("Phone_Number", ""),
             }
             
-            # Upsert data (insert or update if exists based on detail_url)
-            response = self.supabase.table("zillow_fsbo_listings").upsert(
-                data,
-                on_conflict="detail_url"
-            ).execute()
-            
             spider.logger.info(f"Successfully uploaded: {item.get('Address', 'Unknown')}")
+            
+            # Enrichment Integration
+            if self.enrichment_manager:
+                try:
+                    enrichment_data = {
+                        "address": item.get("Address"),
+                        "owner_name": None, # Zillow FSBO often doesn't give name in search results
+                        "owner_email": None,
+                        "owner_phone": item.get("Phone_Number"),
+                    }
+                    address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Zillow FSBO")
+                    if address_hash:
+                        self.supabase.table("zillow_fsbo_listings").update({"address_hash": address_hash}).eq("detail_url", item.get("Detail_URL")).execute()
+                except Exception as e:
+                    spider.logger.error(f"ENRICHMENT ERROR: {e}")
             
         except Exception as e:
             spider.logger.error(f"Error uploading to Supabase: {e}")

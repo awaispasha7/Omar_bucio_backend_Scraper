@@ -24,6 +24,13 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 from pathlib import Path
 
+# Add Scraper_backend to sys.path to import utils
+backend_root = Path(__file__).resolve().parents[1]
+if str(backend_root) not in sys.path:
+    sys.path.append(str(backend_root))
+
+from utils.enrichment_manager import EnrichmentManager
+
 # Load environment variables from project root (Scraper_backend/.env)
 project_root = Path(__file__).resolve().parents[1]
 env_path = project_root / '.env'
@@ -65,11 +72,13 @@ class ForSaleByOwnerSeleniumScraper:
         if self.supabase_url and self.supabase_key:
             try:
                 self.supabase = create_client(self.supabase_url, self.supabase_key)
-                logger.info(f"Connected to Supabase: {self.supabase_url}")
+                self.enrichment_manager = EnrichmentManager(self.supabase)
+                logger.info(f"Connected to Supabase and initialized EnrichmentManager: {self.supabase_url}")
             except Exception as e:
-                logger.error(f"Failed to connect to Supabase: {e}")
+                logger.error(f"Failed to connect to Supabase or initialize EnrichmentManager: {e}")
         else:
             logger.warning("Supabase credentials missing in environment variables")
+            self.enrichment_manager = None
             
         self.setup_driver(headless)
     
@@ -347,6 +356,17 @@ class ForSaleByOwnerSeleniumScraper:
             
             if response.data:
                 logger.info(f"Saved to Supabase: {listing_data.get('address', 'N/A')[:50]}")
+                
+                # Enrichment Integration
+                if self.enrichment_manager:
+                    try:
+                        address_hash = self.enrichment_manager.process_listing(listing_data, listing_source="ForSaleByOwner")
+                        if address_hash:
+                            # Update the listing with the address_hash
+                            self.supabase.table("listings").update({"address_hash": address_hash}).eq("listing_link", listing_data.get("listing_link")).execute()
+                    except Exception as e:
+                        logger.error(f"Error in EnrichmentManager: {e}")
+                        
                 return True
             else:
                 logger.error(f"Failed to save to Supabase: {listing_data.get('address', 'N/A')[:50]}")

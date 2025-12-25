@@ -1,8 +1,13 @@
-import os
-import logging
-from pathlib import Path
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import sys
+
+# Add Scraper_backend to sys.path to import utils
+backend_root = Path(__file__).resolve().parents[3]
+if str(backend_root) not in sys.path:
+    sys.path.append(str(backend_root))
+
+from utils.enrichment_manager import EnrichmentManager
 
 # Load environment variables from project root (Scraper_backend/.env)
 project_root = Path(__file__).resolve().parents[3]  # Go up to Scraper_backend
@@ -19,6 +24,7 @@ class SupabasePipeline:
     
     def __init__(self):
         self.supabase: Client = None
+        self.enrichment_manager = None
         self.table_name = "zillow_frbo_listings"
         
     def open_spider(self, spider):
@@ -27,12 +33,9 @@ class SupabasePipeline:
             url = os.getenv("SUPABASE_URL")
             key = os.getenv("SUPABASE_SERVICE_KEY")
             
-            if not url or not key:
-                logger.error("Supabase credentials not found in environment variables")
-                return
-            
             self.supabase = create_client(url, key)
-            logger.info(f"✅ Connected to Supabase: {url}")
+            self.enrichment_manager = EnrichmentManager(self.supabase)
+            logger.info(f"✅ Connected to Supabase and initialized EnrichmentManager")
             
         except Exception as e:
             logger.error(f"❌ Failed to connect to Supabase: {e}")
@@ -82,13 +85,22 @@ class SupabasePipeline:
                 logger.warning(f"👻 Skipping Ghost Listing (No Address): {data.get('url')}")
                 return item
             
-            # Upsert to Supabase (insert or update if exists)
-            response = self.supabase.table(self.table_name).upsert(
-                data,
-                on_conflict="url"  # Use URL as unique constraint
-            ).execute()
-            
             logger.info(f"✅ Saved to Supabase: {data.get('address', 'Unknown')} (ZPID: {data.get('zpid', 'N/A')})")
+            
+            # Enrichment Integration
+            if self.enrichment_manager:
+                try:
+                    enrichment_data = {
+                        "address": data.get("address"),
+                        "owner_name": data.get("name"),
+                        "owner_email": None,
+                        "owner_phone": data.get("phone_number"),
+                    }
+                    address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Zillow FRBO")
+                    if address_hash:
+                        self.supabase.table(self.table_name).update({"address_hash": address_hash}).eq("url", data.get("url")).execute()
+                except Exception as e:
+                    logger.error(f"❌ ENRICHMENT ERROR: {e}")
             
         except Exception as e:
             logger.error(f"❌ Failed to save item to Supabase: {e}")
