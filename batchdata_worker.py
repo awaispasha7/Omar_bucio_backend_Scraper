@@ -221,6 +221,13 @@ class BatchDataWorker:
         
         logger.info(f"Processing: {address} ({address_hash[:8]})")
         
+        # PRE-FLIGHT CHECK: Validate listing still exists in source table
+        # This prevents "Ghost" spending on deleted listings
+        if not self._validate_listing_exists(listing_source, address_hash):
+            logger.warning(f"SKIPPING: Listing {address_hash[:8]} not found in {listing_source}. likely deleted.")
+            self._mark_no_data(address_hash, f"Orphaned: Not found in {listing_source}")
+            return
+
         try:
             # Call BatchData API
             result = self.call_batchdata(address)
@@ -429,6 +436,50 @@ class BatchDataWorker:
             "checked_at": datetime.now().isoformat()
         }).eq("address_hash", address_hash).execute()
         logger.warning(f"TERMINAL FAIL: {address_hash[:8]} - {reason}")
+
+    def _validate_listing_exists(self, listing_source: str, address_hash: str) -> bool:
+        """
+        PRE-FLIGHT CHECK: Verify listing still exists in source table.
+        Returns True if listing exists, False if orphaned.
+        This prevents wasting money on deleted listings.
+        """
+        if not listing_source:
+            return True  # Unknown source, allow to proceed
+            
+        source_lower = listing_source.lower()
+        source_map = {
+            'fsbo': 'listings',
+            'forsalebyowner': 'listings',
+            'zillow-fsbo': 'zillow_fsbo_listings',
+            'zillow fsbo': 'zillow_fsbo_listings',
+            'zillow-frbo': 'zillow_frbo_listings',
+            'zillow frbo': 'zillow_frbo_listings',
+            'hotpads': 'hotpads_listings',
+            'apartments': 'apartments_frbo_chicago',
+            'apartments.com': 'apartments_frbo_chicago',
+            'trulia': 'trulia_listings',
+            'redfin': 'redfin_listings'
+        }
+        
+        target_table = source_map.get(source_lower)
+        if not target_table:
+            logger.warning(f"Unknown source '{listing_source}', allowing enrichment")
+            return True
+            
+        try:
+            result = self.supabase.table(target_table) \
+                .select("id") \
+                .eq("address_hash", address_hash) \
+                .limit(1) \
+                .execute()
+            
+            exists = len(result.data) > 0
+            if not exists:
+                logger.info(f"Pre-flight check: {address_hash[:8]} NOT FOUND in {target_table}")
+            return exists
+        except Exception as e:
+            logger.error(f"Pre-flight check error: {e}")
+            return True  # On error, allow to proceed (fail-safe)
 
     def _run_dry_mode(self):
         """
