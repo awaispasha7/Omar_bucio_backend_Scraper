@@ -163,7 +163,6 @@ class BatchDataWorker:
             # 1. PRIORITY SOURCE ACQUISITION
             if priority_source:
                 # We try a semi-atomic approach for the priority source
-                now = datetime.now(timezone.utc).isoformat()
                 # Find one
                 res = self.supabase.table("property_owner_enrichment_state") \
                     .select("*") \
@@ -177,7 +176,7 @@ class BatchDataWorker:
                     prop = res.data[0]
                     # Try to lock it specifically
                     lock_res = self.supabase.table("property_owner_enrichment_state") \
-                        .update({"locked": True, "locked_at": now}) \
+                        .update({"locked": True}) \
                         .eq("address_hash", prop['address_hash']) \
                         .eq("locked", False) \
                         .execute()
