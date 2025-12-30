@@ -27,6 +27,7 @@ hotpads_status = {"running": False, "last_run": None, "last_result": None, "erro
 redfin_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 trulia_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 all_scrapers_status = {"running": False, "last_run": None, "last_result": None, "error": None, "current_scraper": None, "completed": []}
+enrichment_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 
 # Global process tracker for stopping
 active_processes = {}
@@ -547,6 +548,42 @@ def stop_all():
         ensure_process_killed(current)
         
     return jsonify({"message": "Stop request received for sequential run"}), 200
+
+@app.route('/api/trigger-enrichment', methods=['POST', 'GET'])
+def trigger_enrichment():
+    if enrichment_status["running"]:
+        return jsonify({"error": "Enrichment is already running"}), 400
+    
+    limit = request.args.get("limit", 50)
+    try:
+        limit = int(limit)
+    except:
+        limit = 50
+        
+    def worker():
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        # Run batchdata_worker.py as subprocess with --limit
+        # Force a fresh run
+        run_process_with_logging(
+            [sys.executable, "batchdata_worker.py", "--limit", str(limit)],
+            base_dir,
+            "Enrichment",
+            enrichment_status
+        )
+    
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"message": f"Enrichment started with limit {limit}"})
+
+@app.route('/api/status-enrichment', methods=['GET'])
+def get_enrichment_status():
+    return jsonify({
+        "status": "running" if enrichment_status["running"] else "idle",
+        "last_run": enrichment_status["last_run"],
+        "error": enrichment_status["error"]
+    })
 
 if __name__ == '__main__':
     # Start scheduler in background

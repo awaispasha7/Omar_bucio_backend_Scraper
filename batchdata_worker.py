@@ -476,5 +476,10 @@ class BatchDataWorker:
         logger.info("=" * 60)
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Run BatchData Enrichment")
+    parser.add_argument("--limit", type=int, default=50, help="Maximum number of properties to process")
+    args = parser.parse_args()
+
     worker = BatchDataWorker()
-    worker.run_enrichment()
+    worker.run_enrichment(max_runs=args.limit)
