@@ -623,9 +623,11 @@ def get_enrichment_stats():
             .eq("source_used", "scraped") \
             .execute()
             
+        # Only count ACTUAL paid API calls (exclude buggy never_checked entries)
         batchdata = supabase.table("property_owner_enrichment_state") \
             .select("*", count="exact", head=True) \
             .eq("source_used", "batchdata") \
+            .neq("status", "never_checked") \
             .execute()
         
         return jsonify({
