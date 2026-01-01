@@ -26,7 +26,7 @@ zillow_frbo_status = {"running": False, "last_run": None, "last_result": None, "
 hotpads_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 redfin_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 trulia_status = {"running": False, "last_run": None, "last_result": None, "error": None}
-all_scrapers_status = {"running": False, "last_run": None, "last_result": None, "error": None, "current_scraper": None, "completed": []}
+all_scrapers_status = {"running": False, "last_run": None, "finished_at": None, "last_result": None, "error": None, "current_scraper": None, "completed": []}
 enrichment_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 
 # Global process tracker for stopping
@@ -192,6 +192,7 @@ def run_sequential_scrapers():
         
     all_scrapers_status["running"] = False
     all_scrapers_status["current_scraper"] = None
+    all_scrapers_status["finished_at"] = datetime.now().isoformat()
     if stop_all_requested:
             add_log("⏹️ Sequential run stopped by user.", "warning")
     else:
@@ -465,6 +466,7 @@ def get_all_status():
         "all_scrapers": {
             "running": all_scrapers_status["running"],
             "last_run": all_scrapers_status["last_run"],
+            "finished_at": all_scrapers_status["finished_at"],
             "current_scraper": all_scrapers_status["current_scraper"]
         },
         "fsbo": { "status": "running" if scraper_status["running"] else "idle", "last_run": scraper_status["last_run"], "last_result": scraper_status["last_result"] },
