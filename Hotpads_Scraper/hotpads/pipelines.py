@@ -101,28 +101,29 @@ class HotpadsPipeline:
             spider.logger.info("=" * 60)
             spider.logger.info(f"SUPABASE BATCH SAVED: {len(self.items_buffer)} items written to database")
             
-            # Enrichment Integration
-            if self.enrichment_manager:
-                for item_data in self.items_buffer:
-                    try:
-                        # Map Hotpads fields to generic enrichment fields
-                        email = item_data.get("email")
-                        if email and is_placeholder_email(email):
-                            email = None  # Treat as missing
-                            
-                        enrichment_data = {
-                            "address": item_data.get("address"),
-                            "owner_name": item_data.get("contact_name"),
-                            "owner_email": email,
-                            "owner_phone": item_data.get("phone_number"),
-                        }
-                        address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Hotpads")
-                        if address_hash:
-                            # Update the item in the buffer with address_hash? 
-                            # Better to update DB directly since we just flushed
-                            self.supabase.table("hotpads_listings").update({"address_hash": address_hash}).eq("url", item_data.get("url")).execute()
-                    except Exception as e:
-                        spider.logger.error(f"ENRICHMENT ERROR: {e}")
+            # AUTOMATIC ENRICHMENT DISABLED - User must click "Run Enrichment" button manually
+            # Enrichment Integration (COMMENTED OUT - manual only)
+            # if self.enrichment_manager:
+            #     for item_data in self.items_buffer:
+            #         try:
+            #             # Map Hotpads fields to generic enrichment fields
+            #             email = item_data.get("email")
+            #             if email and is_placeholder_email(email):
+            #                 email = None  # Treat as missing
+            #                 
+            #             enrichment_data = {
+            #                 "address": item_data.get("address"),
+            #                 "owner_name": item_data.get("contact_name"),
+            #                 "owner_email": email,
+            #                 "owner_phone": item_data.get("phone_number"),
+            #             }
+            #             address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Hotpads")
+            #             if address_hash:
+            #                 # Update the item in the buffer with address_hash? 
+            #                 # Better to update DB directly since we just flushed
+            #                 self.supabase.table("hotpads_listings").update({"address_hash": address_hash}).eq("url", item_data.get("url")).execute()
+            #         except Exception as e:
+            #             spider.logger.error(f"ENRICHMENT ERROR: {e}")
 
             spider.logger.info("=" * 60)
             self.items_buffer = []

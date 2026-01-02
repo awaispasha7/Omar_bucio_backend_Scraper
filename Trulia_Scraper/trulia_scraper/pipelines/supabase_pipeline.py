@@ -120,20 +120,21 @@ class SupabasePipeline:
             self.uploaded_count += 1
             logger.info(f"[OK] Saved to Supabase: {address[:50]}... | Price: {data.get('price', 'N/A')} | Beds: {beds or 'N/A'} | Baths: {baths or 'N/A'}")
             
-            # Enrichment Integration
-            if self.enrichment_manager:
-                try:
-                    enrichment_data = {
-                        "address": address,
-                        "owner_name": data.get("owner_name"),
-                        "owner_email": None,
-                        "owner_phone": data.get("phones"),
-                    }
-                    address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Trulia")
-                    if address_hash:
-                        self.supabase.table(self.table_name).update({"address_hash": address_hash}).eq("listing_link", data.get("listing_link")).execute()
-                except Exception as e:
-                    logger.error(f"[ERROR] ENRICHMENT ERROR: {e}")
+            # AUTOMATIC ENRICHMENT DISABLED - User must click "Run Enrichment" button manually
+            # Enrichment Integration (COMMENTED OUT - manual only)
+            # if self.enrichment_manager:
+            #     try:
+            #         enrichment_data = {
+            #             "address": address,
+            #             "owner_name": data.get("owner_name"),
+            #             "owner_email": None,
+            #             "owner_phone": data.get("phones"),
+            #         }
+            #         address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Trulia")
+            #         if address_hash:
+            #             self.supabase.table(self.table_name).update({"address_hash": address_hash}).eq("listing_link", data.get("listing_link")).execute()
+            #     except Exception as e:
+            #         logger.error(f"[ERROR] ENRICHMENT ERROR: {e}")
             
         except Exception as e:
             self.error_count += 1

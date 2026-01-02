@@ -357,15 +357,16 @@ class ForSaleByOwnerSeleniumScraper:
             if response.data:
                 logger.info(f"Saved to Supabase: {listing_data.get('address', 'N/A')[:50]}")
                 
-                # Enrichment Integration
-                if self.enrichment_manager:
-                    try:
-                        address_hash = self.enrichment_manager.process_listing(listing_data, listing_source="ForSaleByOwner")
-                        if address_hash:
-                            # Update the listing with the address_hash
-                            self.supabase.table("listings").update({"address_hash": address_hash}).eq("listing_link", listing_data.get("listing_link")).execute()
-                    except Exception as e:
-                        logger.error(f"Error in EnrichmentManager: {e}")
+                # AUTOMATIC ENRICHMENT DISABLED - User must click "Run Enrichment" button manually
+                # Enrichment Integration (COMMENTED OUT - manual only)
+                # if self.enrichment_manager:
+                #     try:
+                #         address_hash = self.enrichment_manager.process_listing(listing_data, listing_source="ForSaleByOwner")
+                #         if address_hash:
+                #             # Update the listing with the address_hash
+                #             self.supabase.table("listings").update({"address_hash": address_hash}).eq("listing_link", listing_data.get("listing_link")).execute()
+                #     except Exception as e:
+                #         logger.error(f"Error in EnrichmentManager: {e}")
                         
                 return True
             else:

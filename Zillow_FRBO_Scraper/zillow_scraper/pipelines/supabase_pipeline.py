@@ -93,20 +93,21 @@ class SupabasePipeline:
             
             logger.info(f"✅ Saved to Supabase: {data.get('address', 'Unknown')} (ZPID: {data.get('zpid', 'N/A')})")
             
-            # Enrichment Integration
-            if self.enrichment_manager:
-                try:
-                    enrichment_data = {
-                        "address": data.get("address"),
-                        "owner_name": data.get("name"),
-                        "owner_email": None,
-                        "owner_phone": data.get("phone_number"),
-                    }
-                    address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Zillow FRBO")
-                    if address_hash:
-                        self.supabase.table(self.table_name).update({"address_hash": address_hash}).eq("url", data.get("url")).execute()
-                except Exception as e:
-                    logger.error(f"❌ ENRICHMENT ERROR: {e}")
+            # AUTOMATIC ENRICHMENT DISABLED - User must click "Run Enrichment" button manually
+            # Enrichment Integration (COMMENTED OUT - manual only)
+            # if self.enrichment_manager:
+            #     try:
+            #         enrichment_data = {
+            #             "address": data.get("address"),
+            #             "owner_name": data.get("name"),
+            #             "owner_email": None,
+            #             "owner_phone": data.get("phone_number"),
+            #         }
+            #         address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Zillow FRBO")
+            #         if address_hash:
+            #             self.supabase.table(self.table_name).update({"address_hash": address_hash}).eq("url", data.get("url")).execute()
+            #     except Exception as e:
+            #         logger.error(f"❌ ENRICHMENT ERROR: {e}")
             
         except Exception as e:
             logger.error(f"❌ Failed to save item to Supabase: {e}")

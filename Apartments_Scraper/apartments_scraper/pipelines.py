@@ -356,21 +356,22 @@ class SupabasePipeline:
             self.upload_count += batch_count
             spider.logger.debug(f"📤 Uploaded {batch_count} items to Supabase (total: {self.upload_count})")
             
-            # Enrichment Integration
-            if self.enrichment_manager:
-                for item_data in self.batch:
-                    try:
-                        enrichment_data = {
-                            "address": item_data.get("full_address"),
-                            "owner_name": item_data.get("owner_name"),
-                            "owner_email": item_data.get("owner_email"),
-                            "owner_phone": item_data.get("phone_numbers"),
-                        }
-                        address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Apartments")
-                        if address_hash:
-                            self.supabase_client.table(self.table_name).update({"address_hash": address_hash}).eq("listing_url", item_data.get("listing_url")).execute()
-                    except Exception as e:
-                        spider.logger.error(f"❌ ENRICHMENT ERROR: {e}")
+            # AUTOMATIC ENRICHMENT DISABLED - User must click "Run Enrichment" button manually
+            # Enrichment Integration (COMMENTED OUT - manual only)
+            # if self.enrichment_manager:
+            #     for item_data in self.batch:
+            #         try:
+            #             enrichment_data = {
+            #                 "address": item_data.get("full_address"),
+            #                 "owner_name": item_data.get("owner_name"),
+            #                 "owner_email": item_data.get("owner_email"),
+            #                 "owner_phone": item_data.get("phone_numbers"),
+            #             }
+            #             address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Apartments")
+            #             if address_hash:
+            #                 self.supabase_client.table(self.table_name).update({"address_hash": address_hash}).eq("listing_url", item_data.get("listing_url")).execute()
+            #         except Exception as e:
+            #             spider.logger.error(f"❌ ENRICHMENT ERROR: {e}")
             
         except Exception as e:
             self.error_count += len(self.batch)

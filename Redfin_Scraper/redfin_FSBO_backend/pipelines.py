@@ -151,20 +151,21 @@ class RedfinScraperPipeline:
                 inserted_id = result.data[0].get('id', 'N/A')
                 spider.logger.info(f"Uploaded to Supabase (ID: {inserted_id}): {record.get('address', 'N/A')}")
                 
-                # Enrichment Integration
-                if self.enrichment_manager:
-                    try:
-                        enrichment_data = {
-                            "address": record.get('address'),
-                            "owner_name": record.get('owner_name'),
-                            "owner_email": record.get('emails'),
-                            "owner_phone": record.get('phones'),
-                        }
-                        address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Redfin")
-                        if address_hash:
-                            self.supabase.table('redfin_listings').update({"address_hash": address_hash}).eq("listing_link", record.get("listing_link")).execute()
-                    except Exception as e:
-                        spider.logger.error(f"Error in EnrichmentManager: {e}")
+                # AUTOMATIC ENRICHMENT DISABLED - User must click "Run Enrichment" button manually
+                # Enrichment Integration (COMMENTED OUT - manual only)
+                # if self.enrichment_manager:
+                #     try:
+                #         enrichment_data = {
+                #             "address": record.get('address'),
+                #             "owner_name": record.get('owner_name'),
+                #             "owner_email": record.get('emails'),
+                #             "owner_phone": record.get('phones'),
+                #         }
+                #         address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Redfin")
+                #         if address_hash:
+                #             self.supabase.table('redfin_listings').update({"address_hash": address_hash}).eq("listing_link", record.get("listing_link")).execute()
+                #     except Exception as e:
+                #         spider.logger.error(f"Error in EnrichmentManager: {e}")
                         
                 return True
             else:

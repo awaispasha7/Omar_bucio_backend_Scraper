@@ -62,20 +62,21 @@ class SupabasePipeline:
             
             spider.logger.info(f"Successfully uploaded: {item.get('Address', 'Unknown')}")
             
-            # Enrichment Integration
-            if self.enrichment_manager:
-                try:
-                    enrichment_data = {
-                        "address": item.get("Address"),
-                        "owner_name": None, # Zillow FSBO often doesn't give name in search results
-                        "owner_email": None,
-                        "owner_phone": item.get("Phone_Number"),
-                    }
-                    address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Zillow FSBO")
-                    if address_hash:
-                        self.supabase.table("zillow_fsbo_listings").update({"address_hash": address_hash}).eq("detail_url", item.get("Detail_URL")).execute()
-                except Exception as e:
-                    spider.logger.error(f"ENRICHMENT ERROR: {e}")
+            # AUTOMATIC ENRICHMENT DISABLED - User must click "Run Enrichment" button manually
+            # Enrichment Integration (COMMENTED OUT - manual only)
+            # if self.enrichment_manager:
+            #     try:
+            #         enrichment_data = {
+            #             "address": item.get("Address"),
+            #             "owner_name": None, # Zillow FSBO often doesn't give name in search results
+            #             "owner_email": None,
+            #             "owner_phone": item.get("Phone_Number"),
+            #         }
+            #         address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Zillow FSBO")
+            #         if address_hash:
+            #             self.supabase.table("zillow_fsbo_listings").update({"address_hash": address_hash}).eq("detail_url", item.get("Detail_URL")).execute()
+            #     except Exception as e:
+            #         spider.logger.error(f"ENRICHMENT ERROR: {e}")
             
         except Exception as e:
             spider.logger.error(f"Error uploading to Supabase: {e}")
