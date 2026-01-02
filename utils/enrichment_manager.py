@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 from typing import Optional, Dict, List, Any
+from datetime import datetime, timezone
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from pathlib import Path
@@ -142,6 +143,12 @@ class EnrichmentManager:
                     "owner_phone": True
                 }
             }
+            
+            # Set checked_at for terminal states (enriched, no_owner_data, failed)
+            # This is required for the record to appear in the Enrichment Activity Log
+            if status in ['enriched', 'no_owner_data', 'failed']:
+                data["checked_at"] = datetime.now(timezone.utc).isoformat()
+            
             # Do NOT overwrite existing terminal states if we somehow got here
             # But caller ensures we don't.
             self.supabase.table("property_owner_enrichment_state").upsert(data, on_conflict="address_hash").execute()
