@@ -57,7 +57,7 @@ class TableRouter:
         'zillow_frbo': {
             'scraper_name': 'zillow_spider',
             'scraper_dir': 'Zillow_FRBO_Scraper',
-            'url_param': 'url',
+            'url_param': 'start_url',
             'command': ['-m', 'scrapy', 'crawl', 'zillow_spider', '-a'],
         },
         'fsbo': {

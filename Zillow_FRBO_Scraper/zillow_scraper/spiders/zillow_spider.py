@@ -234,11 +234,8 @@ class ZillowSpiderSpider(scrapy.Spider):
             if 'Address' in item and item['Address']:
                  item['Address'] = " ".join(str(item['Address']).split())
             
-            # Strict Filtering: Skip if not in Illinois
-            addr = item.get('Address', '')
-            if "IL" not in addr and "Illinois" not in addr:
-                 logger.info(f"[SKIP] Non-IL listing: {addr}")
-                 return
+            # Removed Illinois-only filter to support any location
+            # (Previously filtered for IL only)
             
             # Remove duplicates using ZPID if available, otherwise URL
             unique_id = zpid if zpid else item['Url']

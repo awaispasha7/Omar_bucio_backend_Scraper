@@ -189,10 +189,8 @@ class ZillowSpiderSpider(scrapy.Spider):
                 # Normalize whitespace (replace multiple spaces with single space)
                 address = " ".join(raw_address.split())
                 
-                # Strict Filtering: Skip if not in Illinois
-                if "IL" not in address and "Illinois" not in address:
-                    self.logger.info(f"[SKIP] Non-IL listing: {address}")
-                    return
+                # Removed Illinois-only filter to support any location
+                # (Previously filtered for IL only)
                 
                 item["Address"] = address
             except Exception as e:
@@ -200,8 +198,7 @@ class ZillowSpiderSpider(scrapy.Spider):
                 try:
                     raw_address = "".join([text.strip() for text in response.xpath('//div[contains(@class,"styles__AddressWrapper")]/h1//text()').getall()]).strip()
                     address = " ".join(raw_address.split())
-                    if "IL" not in address and "Illinois" not in address:
-                        return
+                    # Removed Illinois-only filter to support any location
                     item["Address"] = address
                 except Exception as e2:
                     self.logger.warning(f"Error extracting fallback address: {e2}")

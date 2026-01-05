@@ -71,7 +71,8 @@ class TruliaSpider(scrapy.Spider):
 
     def start_requests(self):
         """Generate initial requests for each location or URL"""
-        direct_url = getattr(self, 'start_url', None) or os.getenv('TRULIA_FRBO_URL')
+        # Check for URL parameter (from URL-based extraction) or start_url (legacy) or env var
+        direct_url = getattr(self, 'url', None) or getattr(self, 'start_url', None) or os.getenv('TRULIA_FRBO_URL')
         if direct_url:
             logger.info(f"Using Direct URL: {direct_url}")
             meta = {'zipcode': 'Direct URL'}
@@ -80,6 +81,9 @@ class TruliaSpider(scrapy.Spider):
             return
 
         file_data = self.read_input_file()
+        if not file_data:
+            logger.warning("No input file found and no URL provided. Spider will not scrape anything.")
+            return
         try:
             for each_row in file_data:
                 custom_url = each_row.get('url', '').strip()
@@ -231,10 +235,8 @@ class TruliaSpider(scrapy.Spider):
         if 'Address' in item and item['Address']:
              item['Address'] = " ".join(str(item['Address']).split())
         
-        addr = item.get('Address', '')
-        if "IL" not in addr and "Illinois" not in addr:
-             logger.info(f"[SKIP] Non-IL listing: {addr}")
-             return None
+        # Removed Illinois-only filter to support any location
+        # (Previously filtered for IL only: if "IL" not in addr and "Illinois" not in addr: return None)
         
         unique_id = item.get('zpid') or item.get('Url', '')
         
