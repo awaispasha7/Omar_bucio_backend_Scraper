@@ -1,8 +1,11 @@
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import sys
+import logging
+from pathlib import Path
 
 # Add Scraper_backend to sys.path to import utils
+
 backend_root = Path(__file__).resolve().parents[3]
 if str(backend_root) not in sys.path:
     sys.path.append(str(backend_root))
