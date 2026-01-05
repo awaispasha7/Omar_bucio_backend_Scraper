@@ -537,6 +537,18 @@ def trigger_from_url():
             "table": table_name
         }), 400
     
+    # Map platform to scraper name for logging (use capitalized names for consistency)
+    scraper_name_map = {
+        'apartments.com': 'Apartments',
+        'hotpads': 'Hotpads',
+        'redfin': 'Redfin',
+        'trulia': 'Trulia',
+        'zillow_fsbo': 'Zillow_FSBO',
+        'zillow_frbo': 'Zillow_FRBO',
+        'fsbo': 'FSBO'
+    }
+    scraper_name = scraper_name_map.get(platform, platform.title())
+    
     # Build command based on scraper config
     scraper_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), scraper_config['scraper_dir'])
     url_param = scraper_config['url_param']
@@ -552,7 +564,7 @@ def trigger_from_url():
     
     def worker():
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        run_process_with_logging(cmd, scraper_dir, platform, status_dict, env=env)
+        run_process_with_logging(cmd, scraper_dir, scraper_name, status_dict, env=env)
     
     thread = threading.Thread(target=worker)
     thread.daemon = True
@@ -610,11 +622,12 @@ def get_logs():
     # Get logs from buffer (most recent first)
     logs = list(LOG_BUFFER)
     
-    # Filter by scraper name if provided (logs have format "[scraper_name] message")
+    # Filter by scraper name if provided (logs have format "[scraper_name] message" or contain scraper name)
     if scraper_name:
         # Map platform names to scraper names used in logs
         scraper_name_map = {
             'apartments': 'Apartments',
+            'apartments.com': 'Apartments',
             'hotpads': 'Hotpads',
             'redfin': 'Redfin',
             'trulia': 'Trulia',
@@ -623,11 +636,21 @@ def get_logs():
             'fsbo': 'FSBO'
         }
         log_scraper_name = scraper_name_map.get(scraper_name, scraper_name)
-        logs = [log for log in logs if log["message"].startswith(f"[{log_scraper_name}]")]
+        # Filter logs that start with [scraper_name] (strict matching)
+        # Only match logs that explicitly start with the scraper name in brackets
+        logs = [
+            log for log in logs 
+            if log["message"].startswith(f"[{log_scraper_name}]")
+            or log["message"].startswith(f"[{log_scraper_name.lower()}]")
+        ]
     
     # Limit number of logs if specified (most recent)
+    # Note: Reverse the list first to get most recent logs, then take limit from the end
     if limit and limit > 0:
-        logs = logs[-limit:]
+        logs = logs[-limit:] if len(logs) > limit else logs
+    
+    # Reverse to show most recent first (newest at the end of the list)
+    logs.reverse()
     
     return jsonify({
         "logs": logs,
@@ -816,7 +839,7 @@ def get_enrichment_stats():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Start scheduler in background
+    # Start scheduler in background (runs all scrapers daily at midnight)
     start_scheduler()
     
     port = int(os.environ.get('PORT', 8080))

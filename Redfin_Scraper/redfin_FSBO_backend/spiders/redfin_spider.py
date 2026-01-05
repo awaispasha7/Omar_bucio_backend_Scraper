@@ -37,6 +37,8 @@ class RedfinSpiderSpider(scrapy.Spider):
         """Initial request to Redfin FSBO listings"""
         # Use provided URL via -a start_url if available, else use default
         start_url = getattr(self, 'start_url', None)
+        url_provided = start_url is not None
+        
         if not start_url:
             # Default Redfin FSBO URL for DuPage County
             start_url = "https://www.redfin.com/county/733/IL/DuPage-County/for-sale-by-owner"
@@ -44,12 +46,14 @@ class RedfinSpiderSpider(scrapy.Spider):
         self.logger.info(f"Starting scrape for: {start_url}")
         self.logger.info("Using Zyte API for browser rendering")
         
-        # Also add known missing property URLs from reference file to ensure we get them
-        known_properties = [
-            "https://www.redfin.com/IL/Glendale-Heights/1117-Kingston-Ct-60139/home/18141860",
-            "https://www.redfin.com/IL/Downers-Grove/6121-Woodward-Ave-60516/home/192576474",
-            "https://www.redfin.com/IL/Downers-Grove/5400-Walnut-Ave-60515/unit-402/home/18056278",
-        ]
+        # Only add known properties if NO URL was provided (default behavior)
+        # When URL is provided, only scrape that specific location
+        if not url_provided:
+            known_properties = [
+                "https://www.redfin.com/IL/Glendale-Heights/1117-Kingston-Ct-60139/home/18141860",
+                "https://www.redfin.com/IL/Downers-Grove/6121-Woodward-Ave-60516/home/192576474",
+                "https://www.redfin.com/IL/Downers-Grove/5400-Walnut-Ave-60515/unit-402/home/18056278",
+            ]
         
         # First, scrape the search results page
         yield scrapy.Request(
@@ -61,28 +65,30 @@ class RedfinSpiderSpider(scrapy.Spider):
                 "zyte_api": {
                     "browserHtml": True,
                     "geolocation": "US"
-                }
+                },
+                "url_provided": url_provided  # Track if URL was provided to control pagination
             },
             dont_filter=True
         )
         
-        # Also directly scrape known properties to ensure we get them
-        for prop_url in known_properties:
-            if prop_url not in self.unique_list:
-                self.logger.info(f"Adding known property to scrape: {prop_url}")
-                yield scrapy.Request(
-                    url=prop_url,
-                    callback=self.detail_page,
-                    headers=HEADERS,
-                    meta={
-                        "handle_httpstatus_list": [405, 403, 429],
-                        "zyte_api": {
-                            "browserHtml": True,
-                            "geolocation": "US"
-                        }
-                    },
-                    dont_filter=True
-                )
+        # Only scrape known properties if NO URL was provided (default behavior)
+        if not url_provided:
+            for prop_url in known_properties:
+                if prop_url not in self.unique_list:
+                    self.logger.info(f"Adding known property to scrape: {prop_url}")
+                    yield scrapy.Request(
+                        url=prop_url,
+                        callback=self.detail_page,
+                        headers=HEADERS,
+                        meta={
+                            "handle_httpstatus_list": [405, 403, 429],
+                            "zyte_api": {
+                                "browserHtml": True,
+                                "geolocation": "US"
+                            }
+                        },
+                        dont_filter=True
+                    )
 
     def parse(self, response):
         """Parse search results page"""
@@ -229,7 +235,14 @@ class RedfinSpiderSpider(scrapy.Spider):
                         }
                     )
             
-            # Check for next page - look for pagination
+            # Check if URL was provided - if so, don't paginate (only scrape the provided page)
+            url_provided = response.meta.get('url_provided', False)
+            
+            if url_provided:
+                self.logger.info("URL provided - stopping after current page (no pagination)")
+                return  # Stop after scraping the provided URL's page
+            
+            # Check for next page - look for pagination (only when no URL provided)
             next_page = None
             
             # Try multiple selectors for next page
@@ -262,7 +275,8 @@ class RedfinSpiderSpider(scrapy.Spider):
                             "browserHtml": True,
                             "geolocation": "US"
                         },
-                        "consecutive_empty": consecutive_empty
+                        "consecutive_empty": consecutive_empty,
+                        "url_provided": url_provided  # Preserve the flag
                     },
                     dont_filter=True
                 )
