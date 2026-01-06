@@ -83,24 +83,42 @@ class LocationSearcher:
             driver.get("https://www.trulia.com")
             time.sleep(2)  # Wait for page to load
             
-            # Wait for search box - Trulia uses placeholder "Search for City, Neighborhood, Zip, County, School"
+            # Wait for search box - Trulia uses placeholder like "Philadelphia, PA" (city, state format)
             wait = WebDriverWait(driver, 15)
-            search_selectors = [
-                "input[placeholder*='Search for City']",
-                "input[placeholder*='City, Neighborhood']",
-                "input[type='text'][name*='search']",
-                "input[id*='search']",
-                "input[class*='search']",
-                "input[aria-label*='search']"
-            ]
             
+            # First try to find by placeholder text pattern (city, state format like "Philadelphia, PA")
             search_box = None
-            for selector in search_selectors:
-                try:
-                    search_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-                    break
-                except:
-                    continue
+            try:
+                all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                for inp in all_inputs:
+                    if inp.is_displayed() and inp.is_enabled():
+                        placeholder = (inp.get_attribute('placeholder') or '').lower()
+                        # Trulia placeholder is typically a city, state format like "philadelphia, pa"
+                        if ',' in placeholder or 'city' in placeholder or 'neighborhood' in placeholder:
+                            search_box = inp
+                            logger.info(f"[LocationSearcher] Found Trulia search box by placeholder: {placeholder}")
+                            break
+            except:
+                pass
+            
+            # Fallback to other selectors
+            if not search_box:
+                search_selectors = [
+                    "input[placeholder*='Philadelphia']",  # City name pattern
+                    "input[placeholder*='Search for City']",
+                    "input[placeholder*='City, Neighborhood']",
+                    "input[type='text'][name*='search']",
+                    "input[id*='search']",
+                    "input[class*='search']",
+                    "input[aria-label*='search']"
+                ]
+                
+                for selector in search_selectors:
+                    try:
+                        search_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+                        break
+                    except:
+                        continue
             
             if not search_box:
                 raise TimeoutException("Search box not found on Trulia")
@@ -158,6 +176,7 @@ class LocationSearcher:
         """
         Search Apartments.com for a location using their search box.
         Enters the location, clicks search, and returns the resulting URL.
+        Note: Apartments.com URLs are always in format: https://www.apartments.com/hub/{location}/
         """
         driver = None
         try:
@@ -168,31 +187,49 @@ class LocationSearcher:
             driver.get("https://www.apartments.com")
             time.sleep(2)  # Wait for page to load
             
-            # Wait for search box - Apartments.com has textbox with name "Location, School, or Point of Interest"
+            # Wait for search box - Apartments.com uses placeholder like "New York, NY"
             wait = WebDriverWait(driver, 15)
-            search_selectors = [
-                "input[aria-label*='Location']",
-                "input[placeholder*='Location']",
-                "input[type='text'][name*='search']",
-                "input[id*='search']",
-                "input[class*='search']",
-                "input[aria-label*='search']",
-                "input[type='text']"
-            ]
             
+            # First try to find by placeholder text pattern (city, state format like "New York, NY")
             search_box = None
-            for selector in search_selectors:
-                try:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                    # Find the one that's actually visible and in the search area
-                    for elem in elements:
-                        if elem.is_displayed() and elem.is_enabled():
-                            search_box = elem
+            try:
+                all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                for inp in all_inputs:
+                    if inp.is_displayed() and inp.is_enabled():
+                        placeholder = (inp.get_attribute('placeholder') or '').lower()
+                        aria_label = (inp.get_attribute('aria-label') or '').lower()
+                        # Apartments.com placeholder is typically a city, state format like "new york, ny"
+                        # or contains "location" in aria-label
+                        if (',' in placeholder and any(keyword in placeholder for keyword in ['ny', 'nyc', 'city'])) or 'location' in aria_label or 'location' in placeholder:
+                            search_box = inp
+                            logger.info(f"[LocationSearcher] Found Apartments.com search box by placeholder: {placeholder}")
                             break
-                    if search_box:
-                        break
-                except:
-                    continue
+            except:
+                pass
+            
+            # Fallback to other selectors
+            if not search_box:
+                search_selectors = [
+                    "input[aria-label*='Location']",
+                    "input[placeholder*='Location']",
+                    "input[placeholder*='New York']",  # City name pattern
+                    "input[type='text'][name*='search']",
+                    "input[id*='search']",
+                    "input[class*='search']",
+                    "input[aria-label*='search']"
+                ]
+                
+                for selector in search_selectors:
+                    try:
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elements:
+                            if elem.is_displayed() and elem.is_enabled():
+                                search_box = elem
+                                break
+                        if search_box:
+                            break
+                    except:
+                        continue
             
             if not search_box:
                 raise TimeoutException("Search box not found on Apartments.com")
@@ -226,14 +263,15 @@ class LocationSearcher:
             logger.info(f"[LocationSearcher] Apartments.com final URL: {current_url}")
             
             if 'apartments.com' in current_url:
-                # Build for-rent-by-owner URL if needed
-                match = re.search(r'apartments\.com/([a-z0-9-]+(?:-[a-z]{2})?)/', current_url.lower())
+                # Apartments.com URLs are always in format: /hub/{location}/ or /{location}/
+                # Extract location from URL and build for-rent-by-owner URL
+                match = re.search(r'apartments\.com/(?:hub/)?([a-z0-9-]+(?:-[a-z]{2})?)/', current_url.lower())
                 if match:
                     city_state = match.group(1)
-                    if '/for-rent-by-owner/' not in current_url:
-                        listing_url = f"https://www.apartments.com/{city_state}/for-rent-by-owner/"
-                        logger.info(f"[LocationSearcher] Built Apartments.com listing URL: {listing_url}")
-                        return listing_url
+                    # Always use /hub/ format and append for-rent-by-owner
+                    listing_url = f"https://www.apartments.com/hub/{city_state}/for-rent-by-owner/"
+                    logger.info(f"[LocationSearcher] Built Apartments.com listing URL: {listing_url}")
+                    return listing_url
                 
                 return current_url
             
@@ -264,29 +302,47 @@ class LocationSearcher:
             driver.get("https://www.redfin.com")
             time.sleep(2)  # Wait for page to load
             
-            # Wait for search box
+            # Wait for search box - Redfin uses placeholder "City, Address, School, Agent, ZIP"
             wait = WebDriverWait(driver, 15)
-            search_selectors = [
-                "input[type='text'][placeholder*='city']",
-                "input[type='text'][placeholder*='address']",
-                "input[id*='search']",
-                "input[name*='search']",
-                "input[aria-label*='search']",
-                "input[class*='search']"
-            ]
             
+            # First try to find by placeholder text
             search_box = None
-            for selector in search_selectors:
-                try:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                    for elem in elements:
-                        if elem.is_displayed() and elem.is_enabled():
-                            search_box = elem
+            try:
+                all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                for inp in all_inputs:
+                    if inp.is_displayed() and inp.is_enabled():
+                        placeholder = (inp.get_attribute('placeholder') or '').lower()
+                        # Redfin placeholder: "City, Address, School, Agent, ZIP"
+                        if any(keyword in placeholder for keyword in ['city', 'address', 'school', 'agent', 'zip']):
+                            search_box = inp
+                            logger.info(f"[LocationSearcher] Found Redfin search box by placeholder: {placeholder}")
                             break
-                    if search_box:
-                        break
-                except:
-                    continue
+            except:
+                pass
+            
+            # Fallback to other selectors
+            if not search_box:
+                search_selectors = [
+                    "input[placeholder*='City, Address']",
+                    "input[placeholder*='city']",
+                    "input[placeholder*='address']",
+                    "input[id*='search']",
+                    "input[name*='search']",
+                    "input[aria-label*='search']",
+                    "input[class*='search']"
+                ]
+                
+                for selector in search_selectors:
+                    try:
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elements:
+                            if elem.is_displayed() and elem.is_enabled():
+                                search_box = elem
+                                break
+                        if search_box:
+                            break
+                    except:
+                        continue
             
             if not search_box:
                 raise TimeoutException("Search box not found on Redfin")
@@ -351,17 +407,36 @@ class LocationSearcher:
             
             driver = cls._get_driver()
             driver.get("https://hotpads.com")
-            time.sleep(2)  # Wait for page to load
+            time.sleep(3)  # Wait for page to load
             
             wait = WebDriverWait(driver, 15)
-            search_selectors = [
-                "input[type='text'][placeholder*='city']",
-                "input[type='text'][placeholder*='search']",
-                "input[id*='search']",
-                "input[name*='search']",
-                "input[aria-label*='search']",
-                "input[class*='search']"
-            ]
+            # Hotpads search box has placeholder like "Philadelphia, PA"
+            # First try to find by placeholder text pattern
+            search_box = None
+            try:
+                all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                for inp in all_inputs:
+                    if inp.is_displayed() and inp.is_enabled():
+                        placeholder = (inp.get_attribute('placeholder') or '').lower()
+                        # Hotpads placeholder is typically a city, state format like "philadelphia, pa"
+                        if ',' in placeholder and any(keyword in placeholder for keyword in ['pa', 'ny', 'ca', 'tx', 'il', 'fl']):
+                            # Make sure it's not a filter (price, beds)
+                            if 'price' not in placeholder and 'bed' not in placeholder:
+                                search_box = inp
+                                logger.info(f"[LocationSearcher] Found Hotpads search box by placeholder: {placeholder}")
+                                break
+            except:
+                pass
+            
+            # Fallback to other selectors
+            if not search_box:
+                search_selectors = [
+                    "div[role='combobox'] input[type='text']",  # Input inside combobox (most specific)
+                    "input[placeholder*='Philadelphia']",  # Pattern matching placeholder
+                    "input[placeholder*='PA']",  # State abbreviation in placeholder
+                    "input[aria-label*='Search listings']",  # ARIA label
+                    "input[type='text']"  # Generic text input (will filter below)
+                ]
             
             search_box = None
             for selector in search_selectors:
@@ -369,33 +444,69 @@ class LocationSearcher:
                     elements = driver.find_elements(By.CSS_SELECTOR, selector)
                     for elem in elements:
                         if elem.is_displayed() and elem.is_enabled():
-                            search_box = elem
-                            break
+                            # Filter out price and beds dropdowns
+                            placeholder = (elem.get_attribute('placeholder') or '').lower()
+                            aria_label = (elem.get_attribute('aria-label') or '').lower()
+                            input_type = elem.get_attribute('type') or ''
+                            
+                            # Skip if it's clearly a filter (price, beds, etc.)
+                            if any(word in placeholder or word in aria_label for word in ['price', 'bed', 'bath', 'any price', 'all bed']):
+                                continue
+                            
+                            # If it's a text input and not a filter, it's likely the search box
+                            if input_type == 'text' or selector == "div[role='combobox'] input[type='text']":
+                                search_box = elem
+                                logger.info(f"[LocationSearcher] Found Hotpads search box with selector: {selector}")
+                                break
                     if search_box:
                         break
-                except:
+                except Exception as e:
+                    logger.debug(f"[LocationSearcher] Selector {selector} failed: {e}")
                     continue
+            
+            # If still not found, try finding the first visible text input that's not a filter
+            if not search_box:
+                try:
+                    all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                    for inp in all_inputs:
+                        if inp.is_displayed() and inp.is_enabled():
+                            placeholder = (inp.get_attribute('placeholder') or '').lower()
+                            if 'price' not in placeholder and 'bed' not in placeholder and 'bath' not in placeholder:
+                                search_box = inp
+                                logger.info(f"[LocationSearcher] Found Hotpads search box as first non-filter input")
+                                break
+                except Exception as e:
+                    logger.debug(f"[LocationSearcher] Fallback input search failed: {e}")
             
             if not search_box:
                 raise TimeoutException("Search box not found on Hotpads")
             
             search_box.clear()
             search_box.send_keys(location_clean)
-            time.sleep(2)
+            time.sleep(2)  # Wait for autocomplete
             
             try:
-                suggestions = driver.find_elements(By.CSS_SELECTOR, "div[class*='suggestion'], li[class*='suggestion'], ul[class*='autocomplete'] li, div[role='option']")
+                suggestions = driver.find_elements(By.CSS_SELECTOR, "div[class*='suggestion'], li[class*='suggestion'], ul[class*='autocomplete'] li, div[role='option'], ul[role='listbox'] li")
                 if suggestions:
                     suggestions[0].click()
                     time.sleep(3)
                 else:
+                    # Click the Search button
                     try:
-                        submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], button[aria-label*='search'], button[class*='search']")
+                        submit_btn = driver.find_element(By.CSS_SELECTOR, "button[name='Search'], button[aria-label*='Search'], button:contains('Search')")
                         submit_btn.click()
                     except:
-                        search_box.send_keys(Keys.RETURN)
+                        # Try by text content
+                        buttons = driver.find_elements(By.TAG_NAME, "button")
+                        for btn in buttons:
+                            if btn.text.strip().lower() == 'search':
+                                btn.click()
+                                break
+                        else:
+                            search_box.send_keys(Keys.RETURN)
                     time.sleep(3)
             except:
+                # Fallback to Enter key
                 search_box.send_keys(Keys.RETURN)
                 time.sleep(3)
             
@@ -439,28 +550,47 @@ class LocationSearcher:
             time.sleep(3)  # Wait for page to load
             
             wait = WebDriverWait(driver, 15)
-            search_selectors = [
-                "input[type='text'][placeholder*='city']",
-                "input[type='text'][placeholder*='address']",
-                "input[id*='search']",
-                "input[name*='search']",
-                "input[aria-label*='search']",
-                "input[class*='search']",
-                "input[type='text']"
-            ]
-            
+            # Zillow FSBO uses placeholder "Address, neighborhood, city, ZIP"
+            # First try to find by placeholder text
             search_box = None
-            for selector in search_selectors:
-                try:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                    for elem in elements:
-                        if elem.is_displayed() and elem.is_enabled():
-                            search_box = elem
+            try:
+                all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                for inp in all_inputs:
+                    if inp.is_displayed() and inp.is_enabled():
+                        placeholder = (inp.get_attribute('placeholder') or '').lower()
+                        # Zillow placeholder: "Address, neighborhood, city, ZIP"
+                        if any(keyword in placeholder for keyword in ['address', 'neighborhood', 'city', 'zip']):
+                            # Make sure it's not a filter
+                            if 'price' not in placeholder and 'bed' not in placeholder:
+                                search_box = inp
+                                logger.info(f"[LocationSearcher] Found Zillow FSBO search box by placeholder: {placeholder}")
+                                break
+            except:
+                pass
+            
+            # Fallback to other selectors
+            if not search_box:
+                search_selectors = [
+                    "input[placeholder*='Address, neighborhood']",
+                    "input[placeholder*='city']",
+                    "input[placeholder*='address']",
+                    "input[id*='search']",
+                    "input[name*='search']",
+                    "input[aria-label*='search']",
+                    "input[class*='search']"
+                ]
+                
+                for selector in search_selectors:
+                    try:
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elements:
+                            if elem.is_displayed() and elem.is_enabled():
+                                search_box = elem
+                                break
+                        if search_box:
                             break
-                    if search_box:
-                        break
-                except:
-                    continue
+                    except:
+                        continue
             
             if not search_box:
                 raise TimeoutException("Search box not found on Zillow FSBO")
@@ -516,28 +646,47 @@ class LocationSearcher:
             time.sleep(3)  # Wait for page to load
             
             wait = WebDriverWait(driver, 15)
-            search_selectors = [
-                "input[type='text'][placeholder*='city']",
-                "input[type='text'][placeholder*='address']",
-                "input[id*='search']",
-                "input[name*='search']",
-                "input[aria-label*='search']",
-                "input[class*='search']",
-                "input[type='text']"
-            ]
-            
+            # Zillow FRBO uses placeholder "Address, neighborhood, city, ZIP"
+            # First try to find by placeholder text
             search_box = None
-            for selector in search_selectors:
-                try:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                    for elem in elements:
-                        if elem.is_displayed() and elem.is_enabled():
-                            search_box = elem
+            try:
+                all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                for inp in all_inputs:
+                    if inp.is_displayed() and inp.is_enabled():
+                        placeholder = (inp.get_attribute('placeholder') or '').lower()
+                        # Zillow placeholder: "Address, neighborhood, city, ZIP"
+                        if any(keyword in placeholder for keyword in ['address', 'neighborhood', 'city', 'zip']):
+                            # Make sure it's not a filter
+                            if 'price' not in placeholder and 'bed' not in placeholder:
+                                search_box = inp
+                                logger.info(f"[LocationSearcher] Found Zillow FRBO search box by placeholder: {placeholder}")
+                                break
+            except:
+                pass
+            
+            # Fallback to other selectors
+            if not search_box:
+                search_selectors = [
+                    "input[placeholder*='Address, neighborhood']",
+                    "input[placeholder*='city']",
+                    "input[placeholder*='address']",
+                    "input[id*='search']",
+                    "input[name*='search']",
+                    "input[aria-label*='search']",
+                    "input[class*='search']"
+                ]
+                
+                for selector in search_selectors:
+                    try:
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elements:
+                            if elem.is_displayed() and elem.is_enabled():
+                                search_box = elem
+                                break
+                        if search_box:
                             break
-                    if search_box:
-                        break
-                except:
-                    continue
+                    except:
+                        continue
             
             if not search_box:
                 raise TimeoutException("Search box not found on Zillow FRBO")
@@ -593,28 +742,46 @@ class LocationSearcher:
             time.sleep(2)  # Wait for page to load
             
             wait = WebDriverWait(driver, 15)
-            search_selectors = [
-                "input[type='text'][placeholder*='city']",
-                "input[type='text'][placeholder*='search']",
-                "input[id*='search']",
-                "input[name*='search']",
-                "input[aria-label*='search']",
-                "input[class*='search']",
-                "input[type='text']"
-            ]
-            
+            # FSBO uses placeholder "Search our exclusive home inventory. Enter an address, neighborhood, or city"
+            # First try to find by placeholder text
             search_box = None
-            for selector in search_selectors:
-                try:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                    for elem in elements:
-                        if elem.is_displayed() and elem.is_enabled():
-                            search_box = elem
+            try:
+                all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                for inp in all_inputs:
+                    if inp.is_displayed() and inp.is_enabled():
+                        placeholder = (inp.get_attribute('placeholder') or '').lower()
+                        # FSBO placeholder contains: "Search our exclusive home inventory" or "address, neighborhood, or city"
+                        if any(keyword in placeholder for keyword in ['search our', 'exclusive home', 'address', 'neighborhood', 'city']):
+                            search_box = inp
+                            logger.info(f"[LocationSearcher] Found FSBO search box by placeholder: {placeholder[:50]}...")
                             break
-                    if search_box:
-                        break
-                except:
-                    continue
+            except:
+                pass
+            
+            # Fallback to other selectors
+            if not search_box:
+                search_selectors = [
+                    "input[placeholder*='Search our exclusive']",
+                    "input[placeholder*='address, neighborhood']",
+                    "input[placeholder*='city']",
+                    "input[placeholder*='search']",
+                    "input[id*='search']",
+                    "input[name*='search']",
+                    "input[aria-label*='search']",
+                    "input[class*='search']"
+                ]
+                
+                for selector in search_selectors:
+                    try:
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elements:
+                            if elem.is_displayed() and elem.is_enabled():
+                                search_box = elem
+                                break
+                        if search_box:
+                            break
+                    except:
+                        continue
             
             if not search_box:
                 raise TimeoutException("Search box not found on FSBO")
