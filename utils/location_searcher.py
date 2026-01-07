@@ -691,59 +691,75 @@ class LocationSearcher:
             driver.get("https://www.apartments.com")
             time.sleep(2)  # Wait for page to load
             
-            # Wait for search box - Apartments.com uses placeholder like "New York, NY"
-            wait = WebDriverWait(driver, 15)
+            # Wait for search box using WebDriverWait - Apartments.com uses specific ID
+            wait = WebDriverWait(driver, 20)  # Increased timeout to 20 seconds
             
-            # First try to find by placeholder text - Apartments.com uses "Location, School, or Point of Interest"
+            print(f"[LocationSearcher] Waiting for Apartments.com search box to appear...")
+            logger.info("[STATUS] Loading Apartments.com and locating search box...")
+            
+            # Try selectors in order of specificity - use WebDriverWait for each
             search_box = None
-            try:
-                all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
-                for inp in all_inputs:
-                    if inp.is_displayed() and inp.is_enabled():
-                        placeholder = (inp.get_attribute('placeholder') or '').lower()
-                        aria_label = (inp.get_attribute('aria-label') or '').lower()
-                        # Apartments.com placeholder is: "Location, School, or Point of Interest"
-                        if any(keyword in placeholder for keyword in ['location, school', 'location, school, or point', 'location school', 'point of interest']):
-                            search_box = inp
-                            logger.info(f"[LocationSearcher] Found Apartments.com search box by placeholder: {placeholder}")
-                            break
-                        # Also check for location in aria-label
-                        if 'location' in aria_label and 'school' in aria_label:
-                            search_box = inp
-                            logger.info(f"[LocationSearcher] Found Apartments.com search box by aria-label: {aria_label}")
-                            break
-            except:
-                pass
+            search_selectors = [
+                "input#quickSearchLookup",  # Specific ID from HTML provided
+                "input.quickSearchLookup",  # Class name from HTML
+                "input[aria-label='Location, School, or Point of Interest']",  # Exact aria-label match
+                "input[placeholder='Location, School, or Point of Interest']",  # Exact placeholder match
+                "input[aria-label*='Location, School']",  # Partial aria-label
+                "input[placeholder*='Location, School']",  # Partial placeholder
+            ]
             
-            # Fallback to other selectors - use the specific ID from HTML provided
+            for selector in search_selectors:
+                try:
+                    print(f"[LocationSearcher] Trying selector: {selector}")
+                    search_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+                    # Check if element is visible and enabled
+                    if search_box.is_displayed() and search_box.is_enabled():
+                        logger.info(f"[LocationSearcher] ✓ Found Apartments.com search box with selector: {selector}")
+                        print(f"[LocationSearcher] ✓ Found search box: {selector}")
+                        break
+                    else:
+                        print(f"[LocationSearcher] Search box found but not visible/enabled: {selector}")
+                        search_box = None
+                except TimeoutException:
+                    print(f"[LocationSearcher] Timeout waiting for selector: {selector}")
+                    continue
+                except Exception as e:
+                    print(f"[LocationSearcher] Error with selector {selector}: {e}")
+                    continue
+            
+            # Fallback: Try finding by iterating through all inputs if specific selectors failed
             if not search_box:
-                search_selectors = [
-                    "input#quickSearchLookup",  # Specific ID from Apartments.com
-                    "input.quickSearchLookup",  # Class name
-                    "input[aria-label*='Location']",
-                    "input[placeholder*='Location']",
-                    "input[placeholder*='Location, School']",
-                    "input[type='text'][name*='search']",
-                    "input[id*='search']",
-                    "input[class*='search']",
-                    "input[aria-label*='search']"
-                ]
-                
-                for selector in search_selectors:
-                    try:
-                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                        for elem in elements:
-                            if elem.is_displayed() and elem.is_enabled():
-                                search_box = elem
-                                logger.info(f"[LocationSearcher] Found Apartments.com search box with selector: {selector}")
-                                break
-                        if search_box:
-                            break
-                    except:
-                        continue
+                print(f"[LocationSearcher] Specific selectors failed, trying fallback method...")
+                try:
+                    # Wait for any text input to be present
+                    wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "input[type='text']")))
+                    all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                    print(f"[LocationSearcher] Found {len(all_inputs)} text inputs, checking for search box...")
+                    
+                    for inp in all_inputs:
+                        try:
+                            if inp.is_displayed() and inp.is_enabled():
+                                placeholder = (inp.get_attribute('placeholder') or '').lower()
+                                aria_label = (inp.get_attribute('aria-label') or '').lower()
+                                input_id = (inp.get_attribute('id') or '').lower()
+                                input_class = (inp.get_attribute('class') or '').lower()
+                                
+                                # Check for Apartments.com specific indicators
+                                if ('quicksearch' in input_id or 
+                                    'quicksearch' in input_class or
+                                    'location, school' in placeholder or 
+                                    'location, school' in aria_label):
+                                    search_box = inp
+                                    logger.info(f"[LocationSearcher] ✓ Found Apartments.com search box via fallback: id={input_id}, placeholder={placeholder[:50]}")
+                                    print(f"[LocationSearcher] ✓ Found search box via fallback")
+                                    break
+                        except:
+                            continue
+                except Exception as e:
+                    print(f"[LocationSearcher] Fallback method error: {e}")
             
             if not search_box:
-                raise TimeoutException("Search box not found on Apartments.com")
+                raise TimeoutException("Search box not found on Apartments.com after trying all selectors")
             
             # Get initial URL before search
             initial_url = driver.current_url
