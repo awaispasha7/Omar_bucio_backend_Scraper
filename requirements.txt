@@ -28,8 +28,8 @@ gunicorn==21.2.0
 # Selenium for local browser automation
 selenium==4.15.2
 webdriver-manager==4.0.1
-# Zyte Smart Proxy Manager integration for Selenium
-zyte-smartproxy-selenium==1.0.10
+# Zyte Smart Proxy Manager integration for Selenium - using direct proxy config (same as scrapers)
+# zyte-smartproxy-selenium package not needed - using --proxy-server approach
 # Playwright for Browserless.io fallback (when bot detection occurs) - deprecated, using Zyte instead
 playwright==1.40.0
 

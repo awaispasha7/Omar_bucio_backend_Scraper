@@ -1,7 +1,7 @@
 """
 Location Search Utilities
 Searches platforms to get the actual listing URL from a location name
-Uses Selenium WebDriver with Zyte Smart Proxy Manager for all platforms
+Uses Selenium WebDriver with Zyte proxy (direct config, same as existing scrapers)
 """
 
 import re
@@ -27,78 +27,39 @@ class LocationSearcher:
     @classmethod
     def _get_driver(cls, use_zyte_proxy: bool = True):
         """
-        Create and return a Chrome WebDriver instance with optional Zyte Smart Proxy Manager.
-        Uses zyte-smartproxy-selenium package for proper integration.
+        Create and return a Chrome WebDriver instance with optional Zyte proxy.
+        Uses the same direct proxy configuration approach as the existing scrapers.
         
         Args:
-            use_zyte_proxy: If True and ZYTE_API_KEY is available, use Zyte Smart Proxy Manager.
+            use_zyte_proxy: If True and ZYTE_API_KEY is available, use Zyte proxy.
                             If False or key not available, use local Chrome without proxy.
         """
         import os
         import sys
         
-        # Check if we should use Zyte Smart Proxy Manager
+        # Initialize chrome_options
+        chrome_options = Options()
+        
+        # Check if we should use Zyte proxy (same pattern as scrapers use)
         zyte_api_key = None
         if use_zyte_proxy:
             zyte_api_key = os.getenv("ZYTE_API_KEY")
             if zyte_api_key:
-                print(f"[LocationSearcher] Using Zyte Smart Proxy Manager with Selenium")
-                logger.info("[LocationSearcher] Configuring Selenium with Zyte Smart Proxy Manager")
-                
-                # Use zyte-smartproxy-selenium package for proper integration
-                try:
-                    from zyte_smartproxy_selenium import webdriver as zyte_webdriver
-                    
-                    # Configure Zyte Smart Proxy Manager options
-                    spm_options = {
-                        'spm_apikey': zyte_api_key,
-                    }
-                    
-                    # Create driver with Zyte SPM
-                    print(f"[LocationSearcher] Creating Chrome driver with Zyte Smart Proxy Manager...")
-                    driver = zyte_webdriver.Chrome(spm_options=spm_options)
-                    driver.maximize_window()
-                    
-                    # Execute script to remove webdriver property (anti-detection)
-                    try:
-                        driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-                            'source': '''
-                                Object.defineProperty(navigator, 'webdriver', {
-                                    get: () => undefined
-                                });
-                            '''
-                        })
-                    except Exception as e:
-                        logger.warning(f"Could not execute CDP command: {e}")
-                    
-                    print(f"[LocationSearcher] ✓ Chrome driver created with Zyte Smart Proxy Manager")
-                    return driver
-                    
-                except ImportError:
-                    print(f"[LocationSearcher] WARNING: zyte-smartproxy-selenium not installed, falling back to direct proxy config")
-                    logger.warning("zyte-smartproxy-selenium package not found. Install it with: pip install zyte-smartproxy-selenium")
-                    # Fall back to direct proxy configuration (may not work as well)
-                    chrome_options = Options()
-                    zyte_proxy = f"http://{zyte_api_key}:@proxy.zyte.com:8011"
-                    chrome_options.add_argument(f'--proxy-server={zyte_proxy}')
-                except Exception as e:
-                    print(f"[LocationSearcher] WARNING: Failed to use zyte-smartproxy-selenium: {e}, falling back to local Chrome")
-                    logger.warning(f"Zyte Smart Proxy Manager initialization failed: {e}")
-                    # Fall back to regular Chrome
-                    chrome_options = Options()
+                # Use direct proxy configuration like the scrapers do
+                # Same format as: ZYTE_PROXY = f'http://{ZYTE_API_KEY}:@api.zyte.com:8011'
+                zyte_proxy = f"http://{zyte_api_key}:@api.zyte.com:8011"
+                chrome_options.add_argument(f'--proxy-server={zyte_proxy}')
+                print(f"[LocationSearcher] Using Zyte proxy: api.zyte.com:8011")
+                logger.info("[LocationSearcher] Configuring Selenium with Zyte proxy (direct config)")
             else:
                 print(f"[LocationSearcher] ZYTE_API_KEY not found, using local Chrome without proxy")
-                chrome_options = Options()
+                logger.info("[LocationSearcher] Using local Chrome without proxy")
         else:
-            chrome_options = Options()
+            print(f"[LocationSearcher] Not using Zyte proxy (use_zyte_proxy=False)")
         
-        # If we get here, we're using regular Chrome (with or without proxy fallback)
-        # This happens if zyte-smartproxy-selenium package is not available or failed
-        if 'chrome_options' not in locals():
-            chrome_options = Options()
+        # If we got here, chrome_options is already initialized
         
-        # Configure Chrome options for regular Selenium (fallback)
-        # Use headful mode (not headless) - many sites detect headless browsers
+        # Configure Chrome options for regular Selenium
         chrome_options.add_argument('--headless=new')
         
         # Standard options
@@ -136,17 +97,12 @@ class LocationSearcher:
         }
         chrome_options.add_experimental_option("prefs", prefs)
         
-        # If we have a proxy fallback config from earlier, apply it
-        if zyte_api_key and 'zyte_proxy' in locals():
-            chrome_options.add_argument(f'--proxy-server={zyte_proxy}')
-            print(f"[LocationSearcher] Using direct proxy config as fallback: proxy.zyte.com:8011")
-        
         try:
-            # Use Chrome/Chromium (with or without proxy fallback)
-            if zyte_api_key and 'zyte_proxy' in locals():
-                print("[LocationSearcher] Using Selenium with Zyte proxy (fallback mode)")
+            # Use Chrome/Chromium (with or without Zyte proxy)
+            if zyte_api_key:
+                print("[LocationSearcher] Using Selenium with Zyte proxy")
             else:
-                print("[LocationSearcher] Using local Chrome/Chromium with enhanced bot evasion")
+                print("[LocationSearcher] Using local Chrome/Chromium")
             service = Service()
             if sys.platform.startswith('linux'):
                 chrome_binary = '/usr/bin/chromium'
@@ -174,6 +130,11 @@ class LocationSearcher:
                 })
             except Exception as e:
                 logger.warning(f"Could not execute CDP command: {e}")
+            
+            if zyte_api_key:
+                print(f"[LocationSearcher] ✓ Chrome driver created with Zyte proxy")
+            else:
+                print(f"[LocationSearcher] ✓ Chrome driver created (no proxy)")
             
             return driver
         except Exception as e:
@@ -712,14 +673,14 @@ class LocationSearcher:
     @classmethod
     def search_trulia(cls, location: str) -> Optional[str]:
         """
-        Search Trulia for a location using Selenium with Zyte Smart Proxy Manager.
+        Search Trulia for a location using Selenium with Zyte proxy.
         """
         driver = None
         try:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
             
-            # Use Selenium with Zyte Smart Proxy Manager
+            # Use Selenium with Zyte proxy (direct config, same as scrapers)
             driver = cls._get_driver(use_zyte_proxy=True)
             driver.get("https://www.trulia.com")
             time.sleep(3)
@@ -811,14 +772,14 @@ class LocationSearcher:
     @classmethod
     def search_apartments(cls, location: str) -> Optional[str]:
         """
-        Search Apartments.com for a location using Selenium with Zyte Smart Proxy Manager.
+        Search Apartments.com for a location using Selenium with Zyte proxy.
         """
         driver = None
         try:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Apartments.com for: {location_clean}")
             
-            # Use Selenium with Zyte Smart Proxy Manager
+            # Use Selenium with Zyte proxy (direct config, same as scrapers)
             driver = cls._get_driver(use_zyte_proxy=True)
             driver.get("https://www.apartments.com")
             time.sleep(3)  # Wait for page to load
