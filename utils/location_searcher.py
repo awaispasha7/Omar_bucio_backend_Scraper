@@ -72,7 +72,10 @@ class LocationSearcher:
     def search_trulia(cls, location: str) -> Optional[str]:
         """
         Search Trulia for a location using their search box.
-        Enters the location, clicks submit, and returns the resulting URL.
+        After search, URL format examples:
+        - https://www.trulia.com/MN/Minneapolis/
+        - https://www.trulia.com/DC/Washington/
+        - https://www.trulia.com/NY/New_York/
         """
         driver = None
         try:
@@ -81,82 +84,97 @@ class LocationSearcher:
             
             driver = cls._get_driver()
             driver.get("https://www.trulia.com")
-            time.sleep(2)  # Wait for page to load
+            time.sleep(3)  # Wait for page to load
             
-            # Wait for search box - Trulia uses placeholder like "Philadelphia, PA" (city, state format)
             wait = WebDriverWait(driver, 15)
             
-            # First try to find by placeholder text pattern (city, state format like "Philadelphia, PA")
+            # Trulia uses placeholder "Search for City, Neighborhood, Zip, County"
+            # First try to find by placeholder text
             search_box = None
             try:
                 all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
                 for inp in all_inputs:
                     if inp.is_displayed() and inp.is_enabled():
                         placeholder = (inp.get_attribute('placeholder') or '').lower()
-                        # Trulia placeholder is typically a city, state format like "philadelphia, pa"
-                        if ',' in placeholder or 'city' in placeholder or 'neighborhood' in placeholder:
+                        # Trulia placeholder: "Search for City, Neighborhood, Zip, County"
+                        if any(keyword in placeholder for keyword in ['search for city', 'city, neighborhood', 'neighborhood, zip', 'zip, county']):
                             search_box = inp
-                            logger.info(f"[LocationSearcher] Found Trulia search box by placeholder: {placeholder}")
+                            logger.info(f"[LocationSearcher] Found Trulia search box by placeholder: {placeholder[:60]}...")
                             break
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"[LocationSearcher] Error finding by placeholder: {e}")
             
             # Fallback to other selectors
             if not search_box:
                 search_selectors = [
-                    "input[placeholder*='Philadelphia']",  # City name pattern
                     "input[placeholder*='Search for City']",
                     "input[placeholder*='City, Neighborhood']",
-                    "input[type='text'][name*='search']",
+                    "input[placeholder*='city, neighborhood']",
+                    "input[placeholder*='city']",
                     "input[id*='search']",
+                    "input[name*='search']",
                     "input[class*='search']",
                     "input[aria-label*='search']"
                 ]
                 
                 for selector in search_selectors:
                     try:
-                        search_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-                        break
+                        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elements:
+                            if elem.is_displayed() and elem.is_enabled():
+                                search_box = elem
+                                logger.info(f"[LocationSearcher] Found Trulia search box using selector: {selector}")
+                                break
+                        if search_box:
+                            break
                     except:
                         continue
             
             if not search_box:
                 raise TimeoutException("Search box not found on Trulia")
             
-            # Clear and enter location
+            # Clear and enter location text
             search_box.clear()
+            time.sleep(0.5)
             search_box.send_keys(location_clean)
+            logger.info(f"[LocationSearcher] Entered '{location_clean}' into Trulia search box")
             time.sleep(2)  # Wait for autocomplete suggestions
             
-            # Try to click submit button or press Enter
+            # Wait for and click the first autocomplete suggestion
             try:
-                submit_button = driver.find_element(By.CSS_SELECTOR, "button[aria-label*='submit search'], button[type='submit'], button[class*='submit']")
-                submit_button.click()
-            except:
-                # Fallback to Enter key
+                # Wait for suggestions to appear (they may be in a dropdown with map pin icons)
+                suggestions = WebDriverWait(driver, 5).until(
+                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div[class*='suggestion'], li[class*='suggestion'], ul[class*='autocomplete'] li, div[role='option'], ul[role='listbox'] li, div[class*='SearchAutocomplete'] div"))
+                )
+                if suggestions and len(suggestions) > 0:
+                    logger.info(f"[LocationSearcher] Found {len(suggestions)} autocomplete suggestions, clicking first one")
+                    # Click the first suggestion (e.g., "Minneapolis, MN" or "Washington, DC")
+                    suggestions[0].click()
+                    time.sleep(3)  # Wait for redirect after clicking
+                else:
+                    # No suggestions, try Enter key or search button
+                    logger.info(f"[LocationSearcher] No suggestions found, trying Enter key")
+                    search_box.send_keys(Keys.RETURN)
+                    time.sleep(3)
+            except TimeoutException:
+                # Suggestions didn't appear, try Enter key
+                logger.info(f"[LocationSearcher] Suggestions timeout, pressing Enter key")
                 search_box.send_keys(Keys.RETURN)
+                time.sleep(3)
+            except Exception as e:
+                logger.warning(f"[LocationSearcher] Error with suggestions: {e}, using Enter key")
+                search_box.send_keys(Keys.RETURN)
+                time.sleep(3)
             
-            # Wait for page to load/redirect
-            time.sleep(4)
-            
-            # Get the current URL after search
+            # Get the final URL after redirect
+            # Expected format: /{STATE}/{City}/ or /{STATE}/{City_Name}/
+            time.sleep(2)  # Extra wait for redirect
             current_url = driver.current_url
             logger.info(f"[LocationSearcher] Trulia final URL: {current_url}")
             
-            # Extract the listing URL format
+            # Simply return whatever URL we ended up on
+            # The website's natural redirect will give us the correct URL format
             if 'trulia.com' in current_url:
-                # Build for_sale URL if needed
-                match = re.search(r'/([A-Z]{2})/([^/?]+)', current_url)
-                if match:
-                    state = match.group(1)
-                    city = match.group(2)
-                    if '/for_sale/' not in current_url:
-                        listing_url = f"https://www.trulia.com/for_sale/{state}/{city}/SINGLE-FAMILY_HOME_type/"
-                        logger.info(f"[LocationSearcher] Built Trulia listing URL: {listing_url}")
-                        return listing_url
-                    elif '/SINGLE-FAMILY_HOME_type/' not in current_url:
-                        return f"{current_url.rstrip('/')}/SINGLE-FAMILY_HOME_type/"
-                
                 return current_url
             
             return None
