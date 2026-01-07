@@ -418,64 +418,76 @@ class LocationSearcher:
                 # PRIORITY: Try clicking first autocomplete suggestion (like manual user behavior)
                 search_submitted = False
                 suggestion_clicked = False
-                try:
-                    print(f"[LocationSearcher] Looking for autocomplete suggestions...")
-                    logger.info("[STATUS] Waiting for location suggestions...")
-                    # Wait for suggestions to appear
-                    time.sleep(1)  # Give extra time for suggestions
-                    
-                    # Try multiple selectors for Trulia autocomplete suggestions
-                    suggestion_selectors = [
-                        "ul[role='listbox'] li",
-                        "div[role='listbox'] div",
-                        "ul[class*='autocomplete'] li",
-                        "ul[class*='suggestion'] li",
-                        "div[class*='suggestion']",
-                        "li[class*='suggestion']",
-                        "div[role='option']",
-                        "[data-testid*='suggestion']",
-                    ]
-                    
-                    suggestion = None
-                    for selector in suggestion_selectors:
-                        try:
-                            suggestions = page.query_selector_all(selector)
-                            if suggestions:
-                                # Filter out non-location suggestions
-                                for sug in suggestions:
-                                    try:
-                                        if sug.is_visible():
-                                            text = sug.inner_text().lower()
-                                            # Skip generic suggestions
-                                            if any(skip in text for skip in ['current location', 'search by commute', 'popular searches', 'suggested']):
-                                                continue
-                                            # If it contains our location or looks like a location
-                                            if location_clean.lower() in text or ',' in text or any(word in text for word in ['minneapolis', 'city', 'mn', 'state']):
-                                                suggestion = sug
-                                                print(f"[LocationSearcher] Found suggestion: {text[:50]}")
-                                                break
-                                    except:
-                                        continue
-                                if suggestion:
-                                    break
-                        except:
-                            continue
-                    
-                    if suggestion:
-                        try:
-                            print(f"[LocationSearcher] Clicking first autocomplete suggestion...")
-                            suggestion.click()
-                            suggestion_clicked = True
-                            search_submitted = True
-                            time.sleep(2)  # Wait for navigation after clicking suggestion
-                            print(f"[LocationSearcher] Suggestion clicked, waiting for navigation...")
-                        except Exception as click_err:
-                            print(f"[LocationSearcher] Failed to click suggestion: {click_err}")
-                except Exception as sug_err:
-                    print(f"[LocationSearcher] Error finding suggestions: {sug_err}")
                 
-                # If no suggestion clicked, try other methods
-                if not search_submitted:
+                # Wait for suggestions to appear after typing
+                print(f"[LocationSearcher] Looking for autocomplete suggestions...")
+                logger.info("[STATUS] Waiting for location suggestions...")
+                time.sleep(2)  # Give time for suggestions to appear
+                
+                # Try multiple selectors for Trulia autocomplete suggestions
+                suggestion_selectors = [
+                    "ul[role='listbox'] li",
+                    "div[role='listbox'] div",
+                    "ul[class*='autocomplete'] li",
+                    "ul[class*='suggestion'] li",
+                    "div[class*='suggestion']",
+                    "li[class*='suggestion']",
+                    "div[role='option']",
+                    "[data-testid*='suggestion']",
+                ]
+                
+                suggestion = None
+                for selector in suggestion_selectors:
+                    try:
+                        # Check if page/browser is still alive
+                        if page.is_closed():
+                            print(f"[LocationSearcher] Page was closed, skipping suggestion search")
+                            break
+                        
+                        suggestions = page.query_selector_all(selector)
+                        if suggestions:
+                            # Filter out non-location suggestions
+                            for sug in suggestions:
+                                try:
+                                    if sug.is_visible():
+                                        text = sug.inner_text().lower()
+                                        # Skip generic suggestions
+                                        if any(skip in text for skip in ['current location', 'search by commute', 'popular searches', 'suggested']):
+                                            continue
+                                        # If it contains our location or looks like a location
+                                        if location_clean.lower() in text or ',' in text or any(word in text for word in ['minneapolis', 'city', 'mn', 'state']):
+                                            suggestion = sug
+                                            print(f"[LocationSearcher] Found suggestion: {text[:50]}")
+                                            break
+                                except Exception as sug_check_err:
+                                    # Page might have closed, check and break if so
+                                    if 'closed' in str(sug_check_err).lower() or 'target' in str(sug_check_err).lower():
+                                        print(f"[LocationSearcher] Browser/page closed during suggestion check")
+                                        break
+                                    continue
+                            if suggestion:
+                                break
+                    except Exception as selector_err:
+                        # If page closed, break outer loop
+                        if 'closed' in str(selector_err).lower() or 'target' in str(selector_err).lower():
+                            print(f"[LocationSearcher] Browser/page closed during suggestion search")
+                            break
+                        continue
+                
+                if suggestion and not page.is_closed():
+                    try:
+                        print(f"[LocationSearcher] Clicking first autocomplete suggestion...")
+                        suggestion.click()
+                        suggestion_clicked = True
+                        search_submitted = True
+                        time.sleep(2)  # Wait for navigation after clicking suggestion
+                        print(f"[LocationSearcher] Suggestion clicked, waiting for navigation...")
+                    except Exception as click_err:
+                        print(f"[LocationSearcher] Failed to click suggestion: {click_err}")
+                        search_submitted = False
+                
+                # If no suggestion clicked and page is still alive, try other methods
+                if not search_submitted and not page.is_closed():
                     print(f"[LocationSearcher] No suggestion clicked, trying other submission methods...")
                     logger.info("[STATUS] Submitting search...")
                     
@@ -485,10 +497,13 @@ class LocationSearcher:
                         search_box.press("Enter")
                         search_submitted = True
                     except Exception as enter_err:
-                        print(f"[LocationSearcher] Enter key error: {enter_err}")
+                        if 'closed' in str(enter_err).lower() or 'target' in str(enter_err).lower():
+                            print(f"[LocationSearcher] Browser/page closed - cannot press Enter")
+                        else:
+                            print(f"[LocationSearcher] Enter key error: {enter_err}")
                     
                     # Method 2: Look for Trulia's search button
-                    if not search_submitted:
+                    if not search_submitted and not page.is_closed():
                         try:
                             button_selectors = [
                                 "button[type='submit']",
@@ -498,6 +513,8 @@ class LocationSearcher:
                             ]
                             for selector in button_selectors:
                                 try:
+                                    if page.is_closed():
+                                        break
                                     btn = page.query_selector(selector)
                                     if btn and btn.is_visible():
                                         print(f"[LocationSearcher] Found search button, clicking...")
@@ -507,50 +524,66 @@ class LocationSearcher:
                                 except:
                                     continue
                         except Exception as btn_err:
-                            print(f"[LocationSearcher] Button search error: {btn_err}")
+                            if 'closed' not in str(btn_err).lower():
+                                print(f"[LocationSearcher] Button search error: {btn_err}")
                     
                     # Method 3: Try form submission
-                    if not search_submitted:
+                    if not search_submitted and not page.is_closed():
                         try:
                             form = search_box.evaluate_handle("el => el.closest('form')")
                             if form:
                                 print(f"[LocationSearcher] Submitting form directly...")
                                 page.evaluate("form => form.submit()", form)
                                 search_submitted = True
-                        except:
-                            pass
+                        except Exception as form_err:
+                            if 'closed' not in str(form_err).lower():
+                                pass
                 
-                # Wait for navigation using Playwright's built-in wait_for_url
-                print(f"[LocationSearcher] Waiting for navigation...")
-                logger.info("[STATUS] Waiting for page to redirect...")
-                
+                # Wait for navigation - but check if browser is still alive first
                 final_url = None
-                # Use fast polling to catch URL changes quickly (user says it happens within seconds)
-                print(f"[LocationSearcher] Polling URL frequently to catch navigation...")
-                max_wait_seconds = 15
-                check_interval = 0.3  # Check every 300ms
-                max_checks = int(max_wait_seconds / check_interval)
                 
-                for check_attempt in range(max_checks):
-                    time.sleep(check_interval)
-                    try:
-                        current_check_url = page.url
-                        # Check if URL changed from initial homepage
-                        if current_check_url != initial_url and current_check_url not in ['https://www.trulia.com/', 'https://www.trulia.com']:
-                            final_url = current_check_url
-                            elapsed = (check_attempt + 1) * check_interval
-                            print(f"[LocationSearcher] ✓ URL change detected after {elapsed:.1f}s! {initial_url} → {final_url}")
-                            break
-                        elif check_attempt == max_checks - 1:
-                            print(f"[LocationSearcher] ✗ URL did not change after {max_wait_seconds}s. Still at: {current_check_url}")
-                            final_url = current_check_url
-                    except Exception as poll_err:
-                        print(f"[LocationSearcher] Error checking URL (attempt {check_attempt + 1}): {poll_err}")
-                        if check_attempt == max_checks - 1:
-                            try:
-                                final_url = page.url
-                            except:
-                                final_url = None
+                if page.is_closed():
+                    print(f"[LocationSearcher] Page is closed - cannot wait for navigation")
+                else:
+                    print(f"[LocationSearcher] Waiting for navigation...")
+                    logger.info("[STATUS] Waiting for page to redirect...")
+                    
+                    # Use fast polling to catch URL changes quickly (user says it happens within seconds)
+                    print(f"[LocationSearcher] Polling URL frequently to catch navigation...")
+                    max_wait_seconds = 10  # Reduced from 15 to fail faster
+                    check_interval = 0.3  # Check every 300ms
+                    max_checks = int(max_wait_seconds / check_interval)
+                    
+                    for check_attempt in range(max_checks):
+                        time.sleep(check_interval)
+                        try:
+                            # Check if page is still alive
+                            if page.is_closed():
+                                print(f"[LocationSearcher] Page closed during URL polling")
+                                break
+                            
+                            current_check_url = page.url
+                            # Check if URL changed from initial homepage
+                            if current_check_url != initial_url and current_check_url not in ['https://www.trulia.com/', 'https://www.trulia.com']:
+                                final_url = current_check_url
+                                elapsed = (check_attempt + 1) * check_interval
+                                print(f"[LocationSearcher] ✓ URL change detected after {elapsed:.1f}s! {initial_url} → {final_url}")
+                                break
+                            elif check_attempt == max_checks - 1:
+                                print(f"[LocationSearcher] ✗ URL did not change after {max_wait_seconds}s. Still at: {current_check_url}")
+                                final_url = current_check_url
+                        except Exception as poll_err:
+                            # If browser closed, break immediately
+                            if 'closed' in str(poll_err).lower() or 'target' in str(poll_err).lower():
+                                print(f"[LocationSearcher] Browser closed during URL polling: {poll_err}")
+                                break
+                            print(f"[LocationSearcher] Error checking URL (attempt {check_attempt + 1}): {poll_err}")
+                            if check_attempt == max_checks - 1:
+                                try:
+                                    if not page.is_closed():
+                                        final_url = page.url
+                                except:
+                                    final_url = None
                 
                 # Get final URL if we don't have it yet
                 if not final_url:
