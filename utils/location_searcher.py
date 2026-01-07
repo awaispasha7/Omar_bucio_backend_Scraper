@@ -131,6 +131,7 @@ class LocationSearcher:
                 print("[LocationSearcher] No BROWSERLESS_TOKEN - cannot use Playwright fallback")
                 return None
             
+            
             browserless_token = browserless_token.strip()
             location_clean = location.strip()
             print(f"[LocationSearcher] Trying Playwright with Browserless.io for: {location_clean}")
