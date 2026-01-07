@@ -565,6 +565,10 @@ def search_location():
             sys.stdout.flush()
             add_log(f"Starting location search: platform={platform}, location={location}", "info")
             
+            # For platforms with heavy bot detection, inform user it may take longer
+            if platform.lower() in ['trulia', 'redfin']:
+                add_log("⚠️ This platform has aggressive bot detection. Bypassing CAPTCHAs and anti-bot measures... This may take 30-90 seconds", "info")
+            
             # Run the location search with timeout protection
             # Use threading to enforce a maximum timeout (90 seconds to stay under Gunicorn's 120s timeout)
             url = None

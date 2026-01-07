@@ -215,29 +215,28 @@ class LocationSearcher:
                     print(f"[LocationSearcher] Connection traceback: {traceback.format_exc()}")
                     return None
                 
-                # Navigate with more human-like behavior
-                print(f"[LocationSearcher] Navigating to Trulia with human-like delays...")
+                # Navigate to Trulia (skip warm-up, go directly)
+                print(f"[LocationSearcher] Navigating to Trulia...")
+                logger.info("[STATUS] Bypassing bot detection and CAPTCHAs... This may take 30-60 seconds")
+                print(f"[LocationSearcher] [STATUS] Bypassing bot detection and CAPTCHAs... This may take 30-60 seconds")
                 
-                # First, go to a neutral page (Google) to establish a session
                 try:
-                    print(f"[LocationSearcher] Establishing session by visiting Google first...")
-                    page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=20000)
-                    time.sleep(2)  # Human-like pause
-                except:
-                    pass  # Continue even if this fails
-                
-                # Now navigate to Trulia with slower, more human-like navigation
-                page.goto("https://www.trulia.com", wait_until="domcontentloaded", timeout=30000)
-                time.sleep(4)  # Longer wait to let page fully load and execute scripts
-                
-                # Scroll a bit to simulate human behavior
-                try:
-                    page.evaluate("window.scrollTo(0, 300)")
-                    time.sleep(1)
-                    page.evaluate("window.scrollTo(0, 0)")
-                    time.sleep(1)
-                except:
-                    pass
+                    page.goto("https://www.trulia.com", wait_until="domcontentloaded", timeout=60000)  # Increased to 60 seconds
+                    time.sleep(2)  # Just enough to let initial page load
+                except Exception as goto_error:
+                    if "timeout" in str(goto_error).lower():
+                        logger.warning("[STATUS] Page load timeout - Trulia may be blocking. Retrying with longer timeout...")
+                        print(f"[LocationSearcher] [STATUS] Page load timeout - retrying with longer timeout...")
+                        # Retry with networkidle instead of domcontentloaded
+                        try:
+                            page.goto("https://www.trulia.com", wait_until="networkidle", timeout=90000)  # 90 seconds
+                            time.sleep(2)
+                        except Exception as retry_error:
+                            logger.error(f"Failed to load Trulia after retry: {retry_error}")
+                            print(f"[LocationSearcher] Failed to load Trulia after retry: {retry_error}")
+                            raise
+                    else:
+                        raise
                 
                 page_title = page.title()
                 current_url = page.url
@@ -246,6 +245,8 @@ class LocationSearcher:
                 # PRIORITY: Check if search box exists FIRST (best indicator of success)
                 # PerimeterX code may be present even when page works - don't rely on it alone
                 print(f"[LocationSearcher] Checking for search box (waiting up to 10 seconds)...")
+                logger.info("[STATUS] Waiting for page to fully load and checking for bot detection...")
+                print(f"[LocationSearcher] [STATUS] Waiting for page to fully load and checking for bot detection...")
                 search_box_check = None
                 
                 for wait_attempt in range(5):  # Try 5 times with 2 second delays
