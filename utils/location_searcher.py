@@ -359,22 +359,47 @@ class LocationSearcher:
                     print(f"[LocationSearcher] [STATUS] Waiting for location suggestions...")
                     time.sleep(1)  # Give suggestions time to render
                     
-                    # Try to find suggestions
+                    # Try to find suggestions - be more specific about location suggestions
                     suggestions = page.query_selector_all("#react-autowhatever-home-banner li, .react-autosuggest__suggestions-container li, ul[role='listbox'] li")
                     if suggestions:
                         visible_suggestions = []
+                        location_clean_lower = location_clean.lower()
+                        
                         for s in suggestions:
                             try:
                                 if s.is_visible():
                                     suggestion_text = s.inner_text().strip()
-                                    # Skip "Current Location" - we want actual location suggestions
-                                    if suggestion_text and "current location" not in suggestion_text.lower():
+                                    suggestion_lower = suggestion_text.lower()
+                                    
+                                    # Skip non-location suggestions
+                                    skip_keywords = [
+                                        "current location",
+                                        "search by commute time",
+                                        "search commute",
+                                        "commute",
+                                        "popular searches",
+                                        "recent searches"
+                                    ]
+                                    
+                                    if any(keyword in suggestion_lower for keyword in skip_keywords):
+                                        continue
+                                    
+                                    # Look for suggestions that contain the location name
+                                    # Or contain common location indicators (city names, states, zip codes)
+                                    is_location_suggestion = (
+                                        location_clean_lower in suggestion_lower or
+                                        any(word in suggestion_lower for word in location_clean_lower.split() if len(word) > 2) or
+                                        # Check for common location patterns: "City, State" or "City State"
+                                        ("," in suggestion_text and any(c.isupper() for c in suggestion_text))
+                                    )
+                                    
+                                    if suggestion_text and is_location_suggestion:
                                         visible_suggestions.append((s, suggestion_text))
                             except:
                                 continue
                         
                         if visible_suggestions:
-                            # Use the first actual location suggestion (not "Current Location")
+                            # Use the first suggestion that matches our location
                             suggestion_element, suggestion_text = visible_suggestions[0]
                             print(f"[LocationSearcher] Clicking location suggestion: {suggestion_text[:80]}")
                             logger.info(f"[STATUS] Selecting location: {suggestion_text[:80]}")
@@ -382,9 +407,17 @@ class LocationSearcher:
                             # Use JavaScript click to avoid connection issues
                             try:
                                 suggestion_element.evaluate("element => element.click()")
-                            except:
+                            except Exception as js_error:
                                 # Fallback to regular click
-                                suggestion_element.click()
+                                print(f"[LocationSearcher] JavaScript click failed, trying regular click: {js_error}")
+                                try:
+                                    suggestion_element.click()
+                                except Exception as click_error:
+                                    print(f"[LocationSearcher] Regular click also failed: {click_error}")
+                                    # Fall back to Enter key
+                                    search_box.press("Enter")
+                                    time.sleep(3)
+                                    return None
                             
                             # Wait for navigation
                             try:
@@ -392,13 +425,14 @@ class LocationSearcher:
                             except:
                                 time.sleep(3)  # Fallback wait
                         else:
-                            # No valid suggestions, try pressing Enter
-                            print(f"[LocationSearcher] No valid suggestions found, pressing Enter")
+                            # No matching location suggestions found, just press Enter
+                            print(f"[LocationSearcher] No matching location suggestions found (only found UI elements), pressing Enter")
+                            logger.info("[STATUS] No location suggestions found, using Enter key...")
                             search_box.press("Enter")
                             time.sleep(3)
                     else:
                         # No suggestions container, press Enter
-                        print(f"[LocationSearcher] No suggestions container found, pressing Enter")
+                        print(f"[LocationSearcher] No suggestions found, pressing Enter")
                         search_box.press("Enter")
                         time.sleep(3)
                 except Exception as suggestion_error:
