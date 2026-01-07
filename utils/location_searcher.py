@@ -344,43 +344,36 @@ class LocationSearcher:
                     browser.close()
                     return None
                 
-                # Type location with human-like typing (character by character)
+                # Fill search box directly (no slow typing needed - page is already loaded successfully)
+                print(f"[LocationSearcher] Entering location '{location_clean}' into search box...")
                 search_box.click()
-                time.sleep(0.5)  # Wait after click
-                
-                # Clear existing text if any
-                search_box.fill("")
-                time.sleep(0.3)
-                
-                # Type character by character to simulate human typing
-                print(f"[LocationSearcher] Typing '{location_clean}' character by character...")
-                search_box.type(location_clean, delay=random.randint(50, 150))  # Random delay between 50-150ms per character
-                
-                print(f"[LocationSearcher] Finished typing, waiting for suggestions...")
-                time.sleep(3)  # Wait for autocomplete suggestions
+                search_box.fill("")  # Clear
+                search_box.fill(location_clean)  # Paste directly
+                time.sleep(1.5)  # Brief wait for autocomplete suggestions
                 
                 # Wait for suggestions and click first one, or press Enter
                 try:
-                    # Try to find and click first suggestion
+                    # Try to find and click first suggestion (quick check)
                     suggestions = page.query_selector_all("#react-autowhatever-home-banner li, .react-autosuggest__suggestions-container li")
                     if suggestions:
                         visible_suggestions = [s for s in suggestions if s.is_visible()]
                         if visible_suggestions:
-                            print(f"[LocationSearcher] Clicking first suggestion: {visible_suggestions[0].inner_text()[:50]}")
+                            suggestion_text = visible_suggestions[0].inner_text()[:50]
+                            print(f"[LocationSearcher] Clicking first suggestion: {suggestion_text}")
                             visible_suggestions[0].click()
-                            time.sleep(3)
+                            time.sleep(2)  # Reduced wait
                         else:
                             search_box.press("Enter")
-                            time.sleep(3)
+                            time.sleep(2)
                     else:
                         search_box.press("Enter")
-                        time.sleep(3)
+                        time.sleep(2)
                 except:
                     search_box.press("Enter")
-                    time.sleep(3)
+                    time.sleep(2)
                 
-                # Get final URL
-                time.sleep(2)
+                # Get final URL (minimal wait - page should have redirected)
+                time.sleep(1)
                 final_url = page.url
                 print(f"[LocationSearcher] Playwright final URL: {final_url}")
                 
@@ -405,238 +398,15 @@ class LocationSearcher:
     def search_trulia(cls, location: str) -> Optional[str]:
         """
         Search Trulia for a location using their search box.
-        Hybrid approach: Try Selenium first, fallback to Playwright with Browserless.io if bot detected.
+        Skip Selenium (Trulia has heavy bot detection) - go straight to Playwright with Browserless.io.
         """
         location_clean = location.strip()
         logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
         
-        # First attempt: Try with Selenium
-        driver = None
-        try:
-            print(f"[LocationSearcher] Attempt 1: Trying with Selenium...")
-            driver = cls._get_driver()
-            print(f"[LocationSearcher] Driver created, navigating to Trulia...")
-            driver.get("https://www.trulia.com")
-            print(f"[LocationSearcher] Page loaded, waiting 5 seconds...")
-            time.sleep(5)  # Wait for page to fully load
-            
-            # Debug: Check page title and URL
-            page_title = driver.title
-            current_url = driver.current_url
-            print(f"[LocationSearcher] Page title: {page_title}")
-            print(f"[LocationSearcher] Current URL: {current_url}")
-            
-            # Check if blocked by bot detection
-            if "denied" in page_title.lower() or "captcha" in page_title.lower() or "blocked" in page_title.lower():
-                print(f"[LocationSearcher] Bot detection detected with Selenium: {page_title}")
-                print(f"[LocationSearcher] Falling back to Playwright with Browserless.io...")
-                driver.quit()
-                driver = None
-                
-                # Fallback to Playwright
-                return cls._search_trulia_with_playwright(location_clean)
-            
-            # Try to get page source length to verify page loaded
-            try:
-                page_source_length = len(driver.page_source)
-                print(f"[LocationSearcher] Page source length: {page_source_length} characters")
-            except Exception as e:
-                print(f"[LocationSearcher] Could not get page source: {e}")
-            
-            # Wait for page to be fully interactive
-            wait = WebDriverWait(driver, 20)
-            
-            # Wait for body or main content to be present
-            try:
-                wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                print(f"[LocationSearcher] Body element found, page should be loaded")
-            except Exception as e:
-                print(f"[LocationSearcher] WARNING: Body element not found: {e}")
-            
-            print(f"[LocationSearcher] Starting search for search box...")
-            
-            # Simple approach: Use the exact selectors from Trulia HTML
-            # Primary: data-testid="location-search-input"
-            # Fallback: id="banner-search"
-            search_box = None
-            
-            # Try multiple strategies to find the search box
-            search_box = None
-            
-            # Strategy 1: Try exact selectors with shorter timeout
-            selectors_to_try = [
-                ("input[data-testid='location-search-input']", "data-testid"),
-                ("input#banner-search", "id"),
-                ("input[aria-label*='Search for City']", "aria-label"),
-                ("input.react-autosuggest__input", "class"),
-                ("input[type='text'][placeholder*='City']", "placeholder"),
-            ]
-            
-            for selector, selector_type in selectors_to_try:
-                try:
-                    print(f"[LocationSearcher] Trying selector ({selector_type}): {selector}")
-                    search_box = WebDriverWait(driver, 5).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                    )
-                    # Verify it's visible and enabled
-                    if search_box.is_displayed() and search_box.is_enabled():
-                        logger.info(f"[LocationSearcher] Found Trulia search box by {selector_type}")
-                        print(f"[LocationSearcher] SUCCESS: Found search box by {selector_type}")
-                        break
-                    else:
-                        print(f"[LocationSearcher] Found element but not visible/enabled, trying next...")
-                        search_box = None
-                except TimeoutException as e:
-                    print(f"[LocationSearcher] Selector {selector_type} failed: timeout")
-                    continue
-                except Exception as e:
-                    print(f"[LocationSearcher] Selector {selector_type} failed: {e}")
-                    continue
-            
-            # Strategy 2: If still not found, try finding any visible text input
-            if not search_box:
-                print(f"[LocationSearcher] Trying fallback: finding any visible text input...")
-                try:
-                    all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
-                    print(f"[LocationSearcher] Found {len(all_inputs)} text inputs on page")
-                    for inp in all_inputs:
-                        try:
-                            if inp.is_displayed() and inp.is_enabled():
-                                # Check if it might be a search box (has placeholder, aria-label, or id with 'search')
-                                placeholder = inp.get_attribute('placeholder') or ''
-                                aria_label = inp.get_attribute('aria-label') or ''
-                                input_id = inp.get_attribute('id') or ''
-                                
-                                if any(keyword in placeholder.lower() for keyword in ['search', 'city', 'location']) or \
-                                   any(keyword in aria_label.lower() for keyword in ['search', 'city', 'location']) or \
-                                   'search' in input_id.lower():
-                                    search_box = inp
-                                    print(f"[LocationSearcher] Found search box by fallback: placeholder={placeholder[:50]}, aria-label={aria_label[:50]}, id={input_id}")
-                                    break
-                        except:
-                            continue
-                except Exception as e:
-                    print(f"[LocationSearcher] Fallback search failed: {e}")
-            
-            if not search_box:
-                # Check again if blocked (maybe search box was hidden by CAPTCHA)
-                page_title_check = driver.title
-                if "denied" in page_title_check.lower() or "captcha" in page_title_check.lower():
-                    print(f"[LocationSearcher] Bot detection detected during search: {page_title_check}")
-                    print(f"[LocationSearcher] Falling back to Playwright with Browserless.io...")
-                    driver.quit()
-                    driver = None
-                    return cls._search_trulia_with_playwright(location_clean)
-                
-                # Last attempt: get page source snippet for debugging
-                try:
-                    page_source_snippet = driver.page_source[:2000]  # First 2000 chars
-                    print(f"[LocationSearcher] Page source snippet (first 2000 chars):\n{page_source_snippet}")
-                except:
-                    pass
-                raise TimeoutException("Trulia search box not found after trying all selectors")
-            
-            # Ensure it's visible and enabled
-            if not search_box.is_displayed() or not search_box.is_enabled():
-                raise Exception("Trulia search box found but not visible/enabled")
-            
-            # Click to focus
-            search_box.click()
-            time.sleep(0.5)
-            
-            # Clear any existing value
-            search_box.clear()
-            time.sleep(0.3)
-            
-            # Type the location
-            search_box.send_keys(location_clean)
-            logger.info(f"[LocationSearcher] Entered '{location_clean}' into Trulia search box")
-            time.sleep(2)  # Wait for autocomplete
-            
-            # Try to click first suggestion if available
-            try:
-                # Wait for suggestions container to appear
-                suggestions_container = WebDriverWait(driver, 3).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "#react-autowhatever-home-banner[role='listbox'], .react-autosuggest__suggestions-container"))
-                )
-                time.sleep(0.5)  # Wait for suggestions to populate
-                
-                # Find first suggestion
-                suggestions = driver.find_elements(By.CSS_SELECTOR, "#react-autowhatever-home-banner li, .react-autosuggest__suggestions-container li")
-                if suggestions:
-                    visible = [s for s in suggestions if s.is_displayed()]
-                    if visible:
-                        logger.info(f"[LocationSearcher] Clicking first suggestion: {visible[0].text[:50]}")
-                        visible[0].click()
-                        time.sleep(3)
-                    else:
-                        # Press Enter if no visible suggestions
-                        search_box.send_keys(Keys.RETURN)
-                        time.sleep(3)
-                else:
-                    # Press Enter if no suggestions
-                    search_box.send_keys(Keys.RETURN)
-                    time.sleep(3)
-            except TimeoutException:
-                # No suggestions appeared, just press Enter
-                logger.info(f"[LocationSearcher] No suggestions appeared, pressing Enter")
-                search_box.send_keys(Keys.RETURN)
-                time.sleep(3)
-            
-            # Get final URL
-            time.sleep(2)
-            current_url = driver.current_url
-            logger.info(f"[LocationSearcher] Trulia final URL: {current_url}")
-            print(f"[LocationSearcher] Trulia final URL: {current_url}")
-            print(f"[LocationSearcher] URL check: 'trulia.com' in URL = {'trulia.com' in current_url}, URL != homepage = {current_url != 'https://www.trulia.com'}")
-            
-            if 'trulia.com' in current_url and current_url != 'https://www.trulia.com':
-                print(f"[LocationSearcher] Returning URL: {current_url}")
-                return current_url
-            
-            print(f"[LocationSearcher] URL validation failed - returning None")
-            print(f"[LocationSearcher] Current URL was: {current_url}")
-            return None
-            
-        except TimeoutException as e:
-            logger.error(f"[LocationSearcher] Timeout with Selenium: {e}")
-            print(f"[LocationSearcher] TIMEOUT ERROR with Selenium: {e}")
-            
-            # Try Playwright fallback
-            if driver:
-                driver.quit()
-                driver = None
-            
-            print(f"[LocationSearcher] Attempting Playwright fallback...")
-            return cls._search_trulia_with_playwright(location_clean)
-            
-        except Exception as e:
-            error_msg = str(e).lower()
-            # Check if this might be a bot detection error
-            if "denied" in error_msg or "captcha" in error_msg or "blocked" in error_msg or "webdriver" in error_msg:
-                logger.warning(f"[LocationSearcher] Possible bot detection with Selenium: {e}")
-                print(f"[LocationSearcher] Possible bot detection - attempting Playwright fallback...")
-                
-                if driver:
-                    driver.quit()
-                    driver = None
-                
-                return cls._search_trulia_with_playwright(location_clean)
-            
-            # Other errors - try fallback anyway
-            logger.error(f"[LocationSearcher] Error with Selenium: {e}")
-            print(f"[LocationSearcher] ERROR with Selenium: {e}")
-            
-            if driver:
-                driver.quit()
-                driver = None
-            
-            print(f"[LocationSearcher] Attempting Playwright fallback as last resort...")
-            return cls._search_trulia_with_playwright(location_clean)
-            
-        finally:
-            if driver:
-                driver.quit()
+        # Skip Selenium for Trulia - it has heavy bot detection
+        # Go straight to Playwright with Browserless.io
+        print(f"[LocationSearcher] Trulia has heavy bot detection - skipping Selenium, using Playwright with Browserless.io directly")
+        return cls._search_trulia_with_playwright(location_clean)
     
     @classmethod
     def search_apartments(cls, location: str) -> Optional[str]:
