@@ -41,4 +41,5 @@ ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
 # Start command using Gunicorn (using 1 worker to maintain in-memory state consistency)
-CMD ["sh", "-c", "gunicorn -w 1 -b 0.0.0.0:$PORT api_server:app"]
+# Increased timeout to 120 seconds to handle Selenium operations
+CMD ["sh", "-c", "gunicorn -w 1 -b 0.0.0.0:$PORT --timeout 120 --keep-alive 5 api_server:app"]

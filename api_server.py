@@ -534,20 +534,43 @@ def search_location():
         try:
             add_log(f"Starting location search: platform={platform}, location={location}", "info")
             
-            # Run the location search with additional error handling
-            # Note: Selenium timeouts are handled in location_searcher.py (20 second waits)
-            # Total search time should be under 30-40 seconds
-            try:
-                url = LocationSearcher.search_platform(platform, location)
-            except Exception as selenium_error:
-                # Catch Selenium-specific errors that might crash the server
-                error_msg = str(selenium_error)
+            # Run the location search with timeout protection
+            # Use threading to enforce a maximum timeout (90 seconds to stay under Gunicorn's 120s timeout)
+            url = None
+            error_occurred = None
+            
+            def run_search():
+                nonlocal url, error_occurred
+                try:
+                    url = LocationSearcher.search_platform(platform, location)
+                except Exception as e:
+                    error_occurred = e
+            
+            import threading
+            search_thread = threading.Thread(target=run_search, daemon=True)
+            search_thread.start()
+            search_thread.join(timeout=90)  # 90 second timeout (under Gunicorn's 120s)
+            
+            if search_thread.is_alive():
+                # Thread is still running - it timed out
+                add_log(f"Location search timed out after 90 seconds for {platform}/{location}", "error")
+                response = jsonify({
+                    "error": "Location search timed out. The operation took too long. Please try again or use Browserless.io for better performance.",
+                    "platform": platform,
+                    "location": location,
+                    "error_type": "timeout"
+                })
+                response.headers.add('Access-Control-Allow-Origin', '*')
+                return response, 504
+            
+            if error_occurred:
+                # Selenium error occurred
+                error_msg = str(error_occurred)
                 add_log(f"Selenium error during location search: {error_msg}", "error")
                 add_log(f"Selenium traceback: {traceback.format_exc()}", "error")
                 
-                # Return a user-friendly error
                 response = jsonify({
-                    "error": f"Browser automation failed: {error_msg}. Please ensure Chrome/Chromium is available on the server.",
+                    "error": f"Browser automation failed: {error_msg}. Please ensure Chrome/Chromium is available on the server or set BROWSERLESS_TOKEN.",
                     "platform": platform,
                     "location": location,
                     "error_type": "selenium_error"
