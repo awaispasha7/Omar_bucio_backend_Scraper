@@ -73,26 +73,56 @@ class LocationSearcher:
                 print(f"[LocationSearcher] Token length: {len(browserless_token)} characters")
                 print(f"[LocationSearcher] Token starts with: {browserless_token[:10]}...")
                 
-                # Try the standard Browserless.io endpoint
-                browserless_url = f"https://chrome.browserless.io/webdriver?token={browserless_token}"
-                print(f"[LocationSearcher] Connecting to Browserless.io at: {browserless_url.split('?')[0]}...")
+                # Use the correct Browserless.io WebDriver endpoint
+                # According to docs: https://docs.browserless.io/overview/connection-urls#rest-apis
+                # For Selenium WebDriver, use the production endpoint with /webdriver path
+                # Default to US West (SFO) - can be changed via BROWSERLESS_REGION env var
+                region = os.getenv("BROWSERLESS_REGION", "sfo").lower()  # sfo, lon, ams
+                base_url = f"https://production-{region}.browserless.io"
                 
-                try:
-                    driver = webdriver.Remote(
-                        command_executor=browserless_url,
-                        options=chrome_options
-                    )
-                    print("[LocationSearcher] Successfully connected to Browserless.io")
-                except Exception as e:
-                    error_msg = str(e)
-                    print(f"[LocationSearcher] Failed to connect to Browserless.io: {error_msg}")
-                    if "Invalid API key" in error_msg:
-                        print("[LocationSearcher] ERROR: Invalid API key. Please verify:")
+                # Try multiple endpoint formats (Browserless.io docs don't explicitly show Selenium WebDriver endpoint)
+                # Based on REST API pattern and WebDriver standards, try these:
+                endpoints_to_try = [
+                    f"{base_url}/webdriver?token={browserless_token}",
+                    f"{base_url}/wd/hub?token={browserless_token}",  # Standard Selenium Grid endpoint
+                    f"{base_url}/stealth/webdriver?token={browserless_token}",  # Stealth endpoint (if supported)
+                ]
+                
+                driver = None
+                last_error = None
+                
+                for browserless_url in endpoints_to_try:
+                    try:
+                        endpoint_name = browserless_url.split(f"{base_url}/")[1].split("?")[0]
+                        print(f"[LocationSearcher] Trying endpoint: {endpoint_name} (region: {region})")
+                        driver = webdriver.Remote(
+                            command_executor=browserless_url,
+                            options=chrome_options
+                        )
+                        print(f"[LocationSearcher] Successfully connected to Browserless.io via {endpoint_name}")
+                        break
+                    except Exception as e:
+                        last_error = e
+                        error_msg = str(e)
+                        endpoint_name = browserless_url.split(f"{base_url}/")[1].split("?")[0]
+                        print(f"[LocationSearcher] Endpoint {endpoint_name} failed: {error_msg[:150]}")
+                        # If it's an auth error, don't try other endpoints
+                        if "Invalid API key" in error_msg or "401" in error_msg or "403" in error_msg or "Unauthorized" in error_msg:
+                            print("[LocationSearcher] Authentication error detected - stopping endpoint attempts")
+                            raise
+                        continue
+                
+                if driver is None:
+                    error_msg = str(last_error) if last_error else "Unknown error"
+                    print(f"[LocationSearcher] All endpoint formats failed. Last error: {error_msg}")
+                    if "Invalid API key" in error_msg or "401" in error_msg or "403" in error_msg:
+                        print("[LocationSearcher] ERROR: Authentication failed. Please verify:")
                         print("[LocationSearcher]   1. The token is correct in your Browserless.io dashboard")
-                        print("[LocationSearcher]   2. There are no extra spaces in the Railway environment variable")
+                        print("[LocationSearcher]   2. There are no extra spaces in Railway BROWSERLESS_TOKEN variable")
                         print("[LocationSearcher]   3. The token is active and has available credits")
-                        print("[LocationSearcher]   4. You're using the correct endpoint URL for your account")
-                    raise
+                        print("[LocationSearcher]   4. Check: https://www.browserless.io/dashboard for your API token")
+                        print("[LocationSearcher]   5. Note: Selenium WebDriver endpoint format may differ - check Browserless.io docs")
+                    raise Exception(f"Could not connect to Browserless.io with any endpoint format: {error_msg}")
             else:
                 print("[LocationSearcher] No BROWSERLESS_TOKEN found - Using local Chrome/Chromium")
                 service = Service()
