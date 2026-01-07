@@ -1,7 +1,7 @@
 """
 Location Search Utilities
 Searches platforms to get the actual listing URL from a location name
-Hybrid approach: Uses Selenium first, falls back to Playwright with Browserless.io if bot detection occurs
+Uses Selenium WebDriver with Zyte Smart Proxy Manager for all platforms
 """
 
 import re
@@ -25,16 +25,81 @@ class LocationSearcher:
     """Search platforms for location and return the actual listing URL using browser automation"""
     
     @classmethod
-    def _get_driver(cls):
-        """Create and return a Chrome WebDriver instance using same setup as FSBO scraper"""
+    def _get_driver(cls, use_zyte_proxy: bool = True):
+        """
+        Create and return a Chrome WebDriver instance with optional Zyte Smart Proxy Manager.
+        Uses zyte-smartproxy-selenium package for proper integration.
+        
+        Args:
+            use_zyte_proxy: If True and ZYTE_API_KEY is available, use Zyte Smart Proxy Manager.
+                            If False or key not available, use local Chrome without proxy.
+        """
         import os
         import sys
         
-        chrome_options = Options()
+        # Check if we should use Zyte Smart Proxy Manager
+        zyte_api_key = None
+        if use_zyte_proxy:
+            zyte_api_key = os.getenv("ZYTE_API_KEY")
+            if zyte_api_key:
+                print(f"[LocationSearcher] Using Zyte Smart Proxy Manager with Selenium")
+                logger.info("[LocationSearcher] Configuring Selenium with Zyte Smart Proxy Manager")
+                
+                # Use zyte-smartproxy-selenium package for proper integration
+                try:
+                    from zyte_smartproxy_selenium import webdriver as zyte_webdriver
+                    
+                    # Configure Zyte Smart Proxy Manager options
+                    spm_options = {
+                        'spm_apikey': zyte_api_key,
+                    }
+                    
+                    # Create driver with Zyte SPM
+                    print(f"[LocationSearcher] Creating Chrome driver with Zyte Smart Proxy Manager...")
+                    driver = zyte_webdriver.Chrome(spm_options=spm_options)
+                    driver.maximize_window()
+                    
+                    # Execute script to remove webdriver property (anti-detection)
+                    try:
+                        driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+                            'source': '''
+                                Object.defineProperty(navigator, 'webdriver', {
+                                    get: () => undefined
+                                });
+                            '''
+                        })
+                    except Exception as e:
+                        logger.warning(f"Could not execute CDP command: {e}")
+                    
+                    print(f"[LocationSearcher] ✓ Chrome driver created with Zyte Smart Proxy Manager")
+                    return driver
+                    
+                except ImportError:
+                    print(f"[LocationSearcher] WARNING: zyte-smartproxy-selenium not installed, falling back to direct proxy config")
+                    logger.warning("zyte-smartproxy-selenium package not found. Install it with: pip install zyte-smartproxy-selenium")
+                    # Fall back to direct proxy configuration (may not work as well)
+                    chrome_options = Options()
+                    zyte_proxy = f"http://{zyte_api_key}:@proxy.zyte.com:8011"
+                    chrome_options.add_argument(f'--proxy-server={zyte_proxy}')
+                except Exception as e:
+                    print(f"[LocationSearcher] WARNING: Failed to use zyte-smartproxy-selenium: {e}, falling back to local Chrome")
+                    logger.warning(f"Zyte Smart Proxy Manager initialization failed: {e}")
+                    # Fall back to regular Chrome
+                    chrome_options = Options()
+            else:
+                print(f"[LocationSearcher] ZYTE_API_KEY not found, using local Chrome without proxy")
+                chrome_options = Options()
+        else:
+            chrome_options = Options()
         
+        # If we get here, we're using regular Chrome (with or without proxy fallback)
+        # This happens if zyte-smartproxy-selenium package is not available or failed
+        if 'chrome_options' not in locals():
+            chrome_options = Options()
+        
+        # Configure Chrome options for regular Selenium (fallback)
         # Use headful mode (not headless) - many sites detect headless browsers
-        # Note: In cloud environments, you won't see the GUI, but it helps bypass detection
-        chrome_options.add_argument('--headless=new')  # Can try headless=new for better compatibility
+        chrome_options.add_argument('--headless=new')
         
         # Standard options
         chrome_options.add_argument('--no-sandbox')
@@ -64,28 +129,24 @@ class LocationSearcher:
                 "geolocation": 2,
             },
             "profile.managed_default_content_settings": {
-                "images": 1  # Allow images (some sites check for this)
+                "images": 1
             },
             "credentials_enable_service": False,
             "profile.password_manager_enabled": False
         }
         chrome_options.add_experimental_option("prefs", prefs)
         
-        # Note: Browserless.io V2+ does NOT support Selenium WebDriver
-        # They only support Puppeteer/Playwright via WebSocket
-        # If you want to use Browserless.io, you'd need to switch to Playwright
-        # For now, we'll use local Chrome with enhanced bot evasion
-        
-        browserless_token = os.getenv("BROWSERLESS_TOKEN")
-        if browserless_token:
-            print("[LocationSearcher] WARNING: BROWSERLESS_TOKEN is set, but Browserless.io V2+ does not support Selenium WebDriver")
-            print("[LocationSearcher] Browserless.io only supports Puppeteer/Playwright. Falling back to local Chrome.")
-            print("[LocationSearcher] To use Browserless.io, you would need to migrate to Playwright.")
-            print("[LocationSearcher] See: https://docs.browserless.io/overview/connection-urls")
+        # If we have a proxy fallback config from earlier, apply it
+        if zyte_api_key and 'zyte_proxy' in locals():
+            chrome_options.add_argument(f'--proxy-server={zyte_proxy}')
+            print(f"[LocationSearcher] Using direct proxy config as fallback: proxy.zyte.com:8011")
         
         try:
-            # Always use local Chrome/Chromium with enhanced bot evasion
-            print("[LocationSearcher] Using local Chrome/Chromium with enhanced bot evasion")
+            # Use Chrome/Chromium (with or without proxy fallback)
+            if zyte_api_key and 'zyte_proxy' in locals():
+                print("[LocationSearcher] Using Selenium with Zyte proxy (fallback mode)")
+            else:
+                print("[LocationSearcher] Using local Chrome/Chromium with enhanced bot evasion")
             service = Service()
             if sys.platform.startswith('linux'):
                 chrome_binary = '/usr/bin/chromium'
@@ -651,60 +712,330 @@ class LocationSearcher:
     @classmethod
     def search_trulia(cls, location: str) -> Optional[str]:
         """
-        Search Trulia for a location.
-        Try Playwright first, but fallback to direct URL construction if browser automation fails.
+        Search Trulia for a location using Selenium with Zyte Smart Proxy Manager.
         """
-        location_clean = location.strip()
-        logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
-        
-        # Try Playwright with Browserless.io first
-        print(f"[LocationSearcher] Attempting browser automation with Playwright/Browserless.io...")
-        result = cls._search_trulia_with_playwright(location_clean)
-        
-        if result:
-            return result
-        
-        # If browser automation failed, try direct URL construction as final fallback
-        print(f"[LocationSearcher] Browser automation failed, trying direct URL construction...")
-        constructed_url = cls._try_construct_trulia_url(location_clean)
-        if constructed_url:
-            print(f"[LocationSearcher] Constructed URL: {constructed_url}")
-            logger.info(f"[STATUS] Using constructed URL: {constructed_url}")
-            # Return the constructed URL - caller will verify it works
-            return constructed_url
-        
-        return None
+        driver = None
+        try:
+            location_clean = location.strip()
+            logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
+            
+            # Use Selenium with Zyte Smart Proxy Manager
+            driver = cls._get_driver(use_zyte_proxy=True)
+            driver.get("https://www.trulia.com")
+            time.sleep(3)
+            
+            # Wait for search box
+            wait = WebDriverWait(driver, 15)
+            print(f"[LocationSearcher] Looking for Trulia search box...")
+            
+            search_box = None
+            search_selectors = [
+                "input[data-testid='location-search-input']",
+                "input#banner-search",
+                "input[aria-label*='Search for City']",
+                "input.react-autosuggest__input",
+            ]
+            
+            for selector in search_selectors:
+                try:
+                    search_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+                    if search_box.is_displayed() and search_box.is_enabled():
+                        print(f"[LocationSearcher] ✓ Found Trulia search box: {selector}")
+                        break
+                except TimeoutException:
+                    continue
+            
+            if not search_box:
+                # Fallback to URL construction if search box not found
+                print(f"[LocationSearcher] Search box not found, trying URL construction fallback...")
+                return cls._try_construct_trulia_url(location_clean)
+            
+            # Get initial URL
+            initial_url = driver.current_url
+            
+            # Enter location
+            search_box.clear()
+            search_box.send_keys(location_clean)
+            time.sleep(2)  # Wait for autocomplete
+            
+            # Try clicking first suggestion or pressing Enter
+            search_submitted = False
+            try:
+                suggestions = WebDriverWait(driver, 5).until(
+                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul[role='listbox'] li, div[role='option']"))
+                )
+                if suggestions:
+                    # Filter suggestions - skip "Current Location", "Search by commute time", etc.
+                    for sug in suggestions:
+                        try:
+                            text = sug.text.lower()
+                            if any(skip in text for skip in ['current location', 'search by commute', 'popular searches']):
+                                continue
+                            if location_clean.lower() in text or ',' in text:
+                                sug.click()
+                                search_submitted = True
+                                time.sleep(3)
+                                break
+                        except:
+                            continue
+            except:
+                pass
+            
+            if not search_submitted:
+                # Press Enter as fallback
+                search_box.send_keys(Keys.RETURN)
+                time.sleep(3)
+            
+            # Get final URL
+            final_url = driver.current_url
+            logger.info(f"[LocationSearcher] Trulia final URL: {final_url}")
+            
+            if 'trulia.com' in final_url and final_url != 'https://www.trulia.com':
+                return final_url
+            
+            # If URL didn't change, try URL construction
+            return cls._try_construct_trulia_url(location_clean)
+            
+        except TimeoutException:
+            logger.error(f"[LocationSearcher] Timeout waiting for Trulia search box")
+            # Fallback to URL construction
+            return cls._try_construct_trulia_url(location)
+        except Exception as e:
+            logger.error(f"[LocationSearcher] Error searching Trulia: {e}")
+            # Fallback to URL construction
+            return cls._try_construct_trulia_url(location)
+        finally:
+            if driver:
+                driver.quit()
     
     @classmethod
     def search_apartments(cls, location: str) -> Optional[str]:
         """
-        Search Apartments.com for a location.
-        Apartments.com blocks headless browsers, so use Playwright with Browserless.io.
+        Search Apartments.com for a location using Selenium with Zyte Smart Proxy Manager.
         """
-        location_clean = location.strip()
-        logger.info(f"[LocationSearcher] Searching Apartments.com for: {location_clean}")
-        
-        # Apartments.com blocks headless browsers - use Playwright with Browserless.io
-        print(f"[LocationSearcher] Apartments.com blocks headless browsers - using Playwright with Browserless.io")
-        result = cls._search_apartments_with_playwright(location_clean)
-        
-        if result:
-            return result
-        
-        # If browser automation failed, return None (no URL construction fallback for Apartments.com)
-        return None
+        driver = None
+        try:
+            location_clean = location.strip()
+            logger.info(f"[LocationSearcher] Searching Apartments.com for: {location_clean}")
+            
+            # Use Selenium with Zyte Smart Proxy Manager
+            driver = cls._get_driver(use_zyte_proxy=True)
+            driver.get("https://www.apartments.com")
+            time.sleep(3)  # Wait for page to load
+            
+            # Wait for search box
+            wait = WebDriverWait(driver, 15)
+            print(f"[LocationSearcher] Looking for Apartments.com search box...")
+            
+            search_box = None
+            search_selectors = [
+                "input#quickSearchLookup",
+                "input.quickSearchLookup",
+                "input[aria-label='Location, School, or Point of Interest']",
+                "input[placeholder='Location, School, or Point of Interest']",
+            ]
+            
+            for selector in search_selectors:
+                try:
+                    search_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
+                    if search_box.is_displayed() and search_box.is_enabled():
+                        print(f"[LocationSearcher] ✓ Found search box: {selector}")
+                        break
+                except TimeoutException:
+                    continue
+            
+            if not search_box:
+                raise TimeoutException("Search box not found on Apartments.com")
+            
+            # Get initial URL
+            initial_url = driver.current_url
+            print(f"[LocationSearcher] Initial URL: {initial_url}")
+            
+            # Enter location and submit
+            search_box.clear()
+            search_box.send_keys(location_clean)
+            time.sleep(2.5)  # Wait for autocomplete
+            
+            # Try clicking first suggestion or search button
+            search_submitted = False
+            try:
+                suggestions = WebDriverWait(driver, 5).until(
+                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul[role='listbox'] li, div[role='option']"))
+                )
+                if suggestions:
+                    suggestions[0].click()
+                    search_submitted = True
+                    time.sleep(3)
+            except:
+                pass
+            
+            if not search_submitted:
+                try:
+                    button = driver.find_element(By.CSS_SELECTOR, "button.typeaheadSearch")
+                    button.click()
+                    time.sleep(3)
+                except:
+                    pass
+            
+            # Get final URL
+            final_url = driver.current_url
+            logger.info(f"[LocationSearcher] Apartments.com final URL: {final_url}")
+            
+            if 'apartments.com' in final_url and final_url != 'https://www.apartments.com':
+                return final_url
+            
+            return None
+            
+        except TimeoutException:
+            logger.error(f"[LocationSearcher] Timeout waiting for Apartments.com search box")
+            return None
+        except Exception as e:
+            logger.error(f"[LocationSearcher] Error searching Apartments.com: {e}")
+            return None
+        finally:
+            if driver:
+                driver.quit()
     
     @classmethod
-    def _search_apartments_with_playwright(cls, location: str) -> Optional[str]:
+    def _search_apartments_with_zyte(cls, location: str, zyte_api_key: str) -> Optional[str]:
         """
-        Search Apartments.com using Playwright with Browserless.io (required due to bot detection)
+        Search Apartments.com using Playwright with Zyte Smart Proxy Manager.
+        Zyte provides residential proxies and better bot detection bypass.
         """
         try:
             from playwright.sync_api import sync_playwright
             
+            location_clean = location.strip()
+            print(f"[LocationSearcher] Trying Zyte Smart Proxy Manager with Playwright for Apartments.com: {location_clean}")
+            
+            with sync_playwright() as p:
+                print(f"[LocationSearcher] Launching browser with Zyte Smart Proxy Manager...")
+                
+                # Launch browser with Zyte proxy (Smart Proxy Manager format)
+                # Zyte Smart Proxy Manager uses: http://api_key:@proxy.zyte.com:8011
+                browser = p.chromium.launch(
+                    headless=True,
+                    proxy={
+                        "server": "http://proxy.zyte.com:8011",
+                        "username": zyte_api_key,
+                        "password": "",  # Zyte uses API key as username
+                    }
+                )
+                
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept-Encoding": "gzip, deflate, br",
+                    }
+                )
+                
+                # Add stealth scripts
+                context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                    window.chrome = { runtime: {} };
+                """)
+                
+                page = context.new_page()
+                print(f"[LocationSearcher] Navigating to Apartments.com via Zyte Smart Proxy...")
+                
+                try:
+                    page.goto("https://www.apartments.com", wait_until="domcontentloaded", timeout=60000)
+                    time.sleep(3)
+                except Exception as e:
+                    print(f"[LocationSearcher] Failed to load page via Zyte: {e}")
+                    browser.close()
+                    return None
+                
+                # Check if page loaded successfully
+                page_title = page.title()
+                if 'access denied' in page_title.lower():
+                    print(f"[LocationSearcher] Page still blocked with Zyte Smart Proxy Manager")
+                    browser.close()
+                    return None
+                
+                # Find search box and perform search
+                search_box = None
+                for selector in ["input#quickSearchLookup", "input.quickSearchLookup", 
+                                "input[aria-label='Location, School, or Point of Interest']"]:
+                    try:
+                        search_box = page.query_selector(selector)
+                        if search_box and search_box.is_visible():
+                            break
+                    except:
+                        continue
+                
+                if not search_box:
+                    print(f"[LocationSearcher] Search box not found with Zyte")
+                    browser.close()
+                    return None
+                
+                # Perform search
+                search_box.click()
+                time.sleep(0.5)
+                search_box.fill(location_clean)
+                time.sleep(2.5)
+                
+                # Try to click suggestion or search button
+                try:
+                    suggestion = page.query_selector("ul[role='listbox'] li")
+                    if suggestion and suggestion.is_visible():
+                        suggestion.click()
+                        time.sleep(3)
+                    else:
+                        button = page.query_selector("button.typeaheadSearch")
+                        if button:
+                            button.click()
+                            time.sleep(3)
+                except:
+                    pass
+                
+                # Get final URL
+                final_url = page.url
+                browser.close()
+                
+                if 'apartments.com' in final_url and final_url != 'https://www.apartments.com':
+                    print(f"[LocationSearcher] ✓ Success with Zyte! URL: {final_url}")
+                    return final_url
+                
+                return None
+                
+        except ImportError:
+            print("[LocationSearcher] Playwright not installed for Zyte Smart Proxy")
+            return None
+        except Exception as e:
+            print(f"[LocationSearcher] Zyte Smart Proxy error: {e}")
+            import traceback
+            print(f"[LocationSearcher] Traceback: {traceback.format_exc()}")
+            return None
+    
+    @classmethod
+    def _search_apartments_with_playwright(cls, location: str) -> Optional[str]:
+        """
+        Search Apartments.com using Playwright.
+        Tries Zyte Smart Proxy Manager first (if available), then falls back to Browserless.io.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            # Try Zyte Smart Proxy Manager first (if API key available)
+            zyte_api_key = os.getenv("ZYTE_API_KEY")
+            if zyte_api_key:
+                print("[LocationSearcher] ZYTE_API_KEY found - trying Zyte Smart Proxy Manager with Playwright")
+                result = cls._search_apartments_with_zyte(location, zyte_api_key)
+                if result:
+                    return result
+                print("[LocationSearcher] Zyte Smart Proxy Manager failed, falling back to Browserless.io")
+            
+            # Fallback to Browserless.io
             browserless_token = os.getenv("BROWSERLESS_TOKEN")
             if not browserless_token:
-                print("[LocationSearcher] No BROWSERLESS_TOKEN - cannot use Playwright for Apartments.com")
+                print("[LocationSearcher] No BROWSERLESS_TOKEN or ZYTE_API_KEY - cannot use Playwright for Apartments.com")
                 return None
             
             browserless_token = browserless_token.strip()
@@ -744,20 +1075,35 @@ class LocationSearcher:
                     }
                 )
                 
-                # Add stealth scripts
+                # Add comprehensive stealth scripts (similar to Trulia)
                 context.add_init_script("""
+                    // Override the `plugins` property to use a custom getter
                     Object.defineProperty(navigator, 'plugins', {
                         get: () => [1, 2, 3, 4, 5]
                     });
+                    
+                    // Override the `languages` property
                     Object.defineProperty(navigator, 'languages', {
                         get: () => ['en-US', 'en']
                     });
+                    
+                    // Remove webdriver property
                     Object.defineProperty(navigator, 'webdriver', {
                         get: () => undefined
                     });
+                    
+                    // Mock chrome property
                     window.chrome = {
                         runtime: {}
                     };
+                    
+                    // Override permissions
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                            Promise.resolve({ state: Notification.permission }) :
+                            originalQuery(parameters)
+                    );
                 """)
                 
                 page = context.new_page()
@@ -770,31 +1116,41 @@ class LocationSearcher:
                 
                 try:
                     page.goto("https://www.apartments.com", wait_until="domcontentloaded", timeout=60000)
-                    time.sleep(3)  # Wait for page to fully load
+                    time.sleep(2)  # Initial wait
+                    
+                    # Add human-like behavior: scroll down and back up
+                    try:
+                        page.evaluate("window.scrollTo(0, 300)")
+                        time.sleep(0.5)
+                        page.evaluate("window.scrollTo(0, 0)")
+                        time.sleep(0.5)
+                    except:
+                        pass
                 except Exception as goto_error:
                     if "timeout" in str(goto_error).lower():
                         logger.warning("[STATUS] Page load timeout - retrying...")
                         try:
                             page.goto("https://www.apartments.com", wait_until="networkidle", timeout=90000)
-                            time.sleep(3)
+                            time.sleep(2)
+                            # Add human-like behavior on retry too
+                            try:
+                                page.evaluate("window.scrollTo(0, 300)")
+                                time.sleep(0.5)
+                                page.evaluate("window.scrollTo(0, 0)")
+                                time.sleep(0.5)
+                            except:
+                                pass
                         except Exception as retry_error:
                             logger.error(f"Failed to load Apartments.com after retry: {retry_error}")
                             return None
                     else:
                         return None
                 
-                page_title = page.title()
-                current_url = page.url
-                print(f"[LocationSearcher] Page title: {page_title}, URL: {current_url}")
-                
-                # Check if page was blocked
-                if 'access denied' in page_title.lower() or 'blocked' in page_title.lower():
-                    print(f"[LocationSearcher] Page still blocked even with Browserless.io")
-                    return None
-                
-                # Find search box - use the specific ID from HTML
-                print(f"[LocationSearcher] Looking for search box...")
-                logger.info("[STATUS] Locating search box...")
+                # Wait and check for search box multiple times (like Trulia)
+                # This gives the page time to process and bypass bot detection
+                print(f"[LocationSearcher] Checking for search box (waiting up to 15 seconds)...")
+                logger.info("[STATUS] Waiting for page to fully load and checking for bot detection...")
+                print(f"[LocationSearcher] [STATUS] Waiting for page to fully load and checking for bot detection...")
                 
                 search_box = None
                 search_box_selectors = [
@@ -802,25 +1158,58 @@ class LocationSearcher:
                     "input.quickSearchLookup",
                     "input[aria-label='Location, School, or Point of Interest']",
                     "input[placeholder='Location, School, or Point of Interest']",
+                    "input[aria-label*='Location, School']",
+                    "input[placeholder*='Location, School']",
                 ]
                 
-                for selector in search_box_selectors:
-                    try:
-                        search_box = page.query_selector(selector)
-                        if search_box:
-                            try:
-                                if search_box.is_visible():
-                                    print(f"[LocationSearcher] ✓ Found search box: {selector}")
+                # Try multiple times with delays (up to 5 attempts, 3 seconds apart)
+                for attempt in range(5):
+                    for selector in search_box_selectors:
+                        try:
+                            search_box = page.query_selector(selector)
+                            if search_box:
+                                try:
+                                    if search_box.is_visible():
+                                        print(f"[LocationSearcher] ✓ Search box found and visible: {selector}")
+                                        break
+                                except:
+                                    # If visibility check fails, try to use it anyway
+                                    print(f"[LocationSearcher] ✓ Search box found (visibility uncertain): {selector}")
                                     break
-                            except:
-                                print(f"[LocationSearcher] ✓ Found search box (visibility uncertain): {selector}")
-                                break
-                    except:
-                        continue
+                        except:
+                            continue
+                    
+                    if search_box:
+                        break
+                    
+                    if attempt < 4:
+                        print(f"[LocationSearcher] Search box not found yet, waiting 3 more seconds... (attempt {attempt + 2}/5)")
+                        time.sleep(3)
                 
+                # If search box not found, check for explicit blocking
                 if not search_box:
-                    print(f"[LocationSearcher] Search box not found")
-                    return None
+                    print(f"[LocationSearcher] Search box not found. Checking for blocking messages...")
+                    page_title = page.title()
+                    page_content = page.content().lower()
+                    current_url = page.url
+                    print(f"[LocationSearcher] Page title: {page_title}, URL: {current_url}")
+                    
+                    # Check for explicit blocking messages in content (not just title)
+                    explicit_blocking = (
+                        "access denied" in page_title.lower() or
+                        "access denied" in page_content or
+                        "blocked" in page_title.lower() or
+                        ("blocked" in page_content and "access" in page_content) or
+                        "please verify you are human" in page_content
+                    )
+                    
+                    if explicit_blocking:
+                        print(f"[LocationSearcher] Page explicitly blocked - Access Denied message detected")
+                        return None
+                    else:
+                        # Page loaded but search box not found - might be a different structure
+                        print(f"[LocationSearcher] Page loaded but search box not found - page structure may differ")
+                        return None
             
                 # Get initial URL
                 initial_url = page.url
@@ -978,7 +1367,7 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Redfin for: {location_clean}")
             
-            driver = cls._get_driver()
+            driver = cls._get_driver(use_zyte_proxy=True)
             driver.get("https://www.redfin.com")
             time.sleep(2)  # Wait for page to load
             
@@ -1085,7 +1474,7 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Hotpads for: {location_clean}")
             
-            driver = cls._get_driver()
+            driver = cls._get_driver(use_zyte_proxy=True)
             driver.get("https://hotpads.com")
             time.sleep(3)  # Wait for page to load
             
@@ -1224,7 +1613,7 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Zillow FSBO for: {location_clean}")
             
-            driver = cls._get_driver()
+            driver = cls._get_driver(use_zyte_proxy=True)
             # Go to FSBO page first
             driver.get("https://www.zillow.com/homes/fsbo/")
             time.sleep(3)  # Wait for page to load
@@ -1321,7 +1710,7 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Zillow FRBO for: {location_clean}")
             
-            driver = cls._get_driver()
+            driver = cls._get_driver(use_zyte_proxy=True)
             driver.get("https://www.zillow.com/homes/for_rent/")
             time.sleep(3)  # Wait for page to load
             
@@ -1417,7 +1806,7 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching FSBO for: {location_clean}")
             
-            driver = cls._get_driver()
+            driver = cls._get_driver(use_zyte_proxy=True)
             driver.get("https://www.forsalebyowner.com")
             time.sleep(2)  # Wait for page to load
             
