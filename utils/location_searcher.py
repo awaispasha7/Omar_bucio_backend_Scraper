@@ -680,8 +680,12 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
             
-            # Use Selenium with Zyte proxy (direct config, same as scrapers)
-            driver = cls._get_driver(use_zyte_proxy=True)
+            # Try without proxy first - Zyte proxy doesn't work well with Selenium interactive automation
+            # Main scrapers use scrapy-zyte-api (HTTP), not Selenium proxy
+            # Main scrapers use scrapy-zyte-api (HTTP API), not Selenium proxy
+            # Zyte proxy via --proxy-server doesn't work well with Selenium interactive automation
+            # Use local Chrome without proxy (FSBO proved this works)
+            driver = cls._get_driver(use_zyte_proxy=False)
             driver.get("https://www.trulia.com")
             
             wait = WebDriverWait(driver, 20)
@@ -829,8 +833,12 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Apartments.com for: {location_clean}")
             
-            # Use Selenium with Zyte proxy (direct config, same as scrapers)
-            driver = cls._get_driver(use_zyte_proxy=True)
+            # Try without proxy first - Zyte proxy doesn't work well with Selenium interactive automation
+            # Main scrapers use scrapy-zyte-api (HTTP), not Selenium proxy
+            # Main scrapers use scrapy-zyte-api (HTTP API), not Selenium proxy
+            # Zyte proxy via --proxy-server doesn't work well with Selenium interactive automation
+            # Use local Chrome without proxy (FSBO proved this works)
+            driver = cls._get_driver(use_zyte_proxy=False)
             driver.get("https://www.apartments.com")
             
             wait = WebDriverWait(driver, 25)
@@ -1498,7 +1506,10 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Redfin for: {location_clean}")
             
-            driver = cls._get_driver(use_zyte_proxy=True)
+            # Main scrapers use scrapy-zyte-api (HTTP API), not Selenium proxy
+            # Zyte proxy via --proxy-server doesn't work well with Selenium interactive automation
+            # Use local Chrome without proxy (FSBO proved this works)
+            driver = cls._get_driver(use_zyte_proxy=False)
             driver.get("https://www.redfin.com")
             time.sleep(2)  # Wait for page to load
             
@@ -1605,7 +1616,10 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Hotpads for: {location_clean}")
             
-            driver = cls._get_driver(use_zyte_proxy=True)
+            # Main scrapers use scrapy-zyte-api (HTTP API), not Selenium proxy
+            # Zyte proxy via --proxy-server doesn't work well with Selenium interactive automation
+            # Use local Chrome without proxy (FSBO proved this works)
+            driver = cls._get_driver(use_zyte_proxy=False)
             driver.get("https://hotpads.com")
             time.sleep(3)  # Wait for page to load
             
@@ -1747,7 +1761,10 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Zillow FSBO for: {location_clean}")
             
-            driver = cls._get_driver(use_zyte_proxy=True)
+            # Main scrapers use scrapy-zyte-api (HTTP API), not Selenium proxy
+            # Zyte proxy via --proxy-server doesn't work well with Selenium interactive automation
+            # Use local Chrome without proxy (FSBO proved this works)
+            driver = cls._get_driver(use_zyte_proxy=False)
             # Go to Zillow homepage first (not FSBO page - search box is on homepage)
             driver.get("https://www.zillow.com")
             
@@ -1887,7 +1904,10 @@ class LocationSearcher:
             location_clean = location.strip()
             logger.info(f"[LocationSearcher] Searching Zillow FRBO for: {location_clean}")
             
-            driver = cls._get_driver(use_zyte_proxy=True)
+            # Main scrapers use scrapy-zyte-api (HTTP API), not Selenium proxy
+            # Zyte proxy via --proxy-server doesn't work well with Selenium interactive automation
+            # Use local Chrome without proxy (FSBO proved this works)
+            driver = cls._get_driver(use_zyte_proxy=False)
             driver.get("https://www.zillow.com/homes/for_rent/")
             time.sleep(3)  # Wait for page to load
             
@@ -1984,6 +2004,9 @@ class LocationSearcher:
             logger.info(f"[LocationSearcher] Searching FSBO for: {location_clean}")
             
             # FSBO works fine without proxy (same as FSBO scraper - no heavy bot detection)
+            # Main scrapers use scrapy-zyte-api (HTTP API), not Selenium proxy
+            # Zyte proxy via --proxy-server doesn't work well with Selenium interactive automation
+            # Use local Chrome without proxy (FSBO proved this works)
             driver = cls._get_driver(use_zyte_proxy=False)
             driver.get("https://www.forsalebyowner.com")
             
