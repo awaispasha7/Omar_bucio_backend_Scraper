@@ -80,12 +80,22 @@ class LocationSearcher:
                 region = os.getenv("BROWSERLESS_REGION", "sfo").lower()  # sfo, lon, ams
                 base_url = f"https://production-{region}.browserless.io"
                 
-                # Try multiple endpoint formats (Browserless.io docs don't explicitly show Selenium WebDriver endpoint)
-                # Based on REST API pattern and WebDriver standards, try these:
+                # Try multiple endpoint formats with launch parameters
+                # Note: Browserless.io primarily supports Puppeteer/Playwright via WebSocket
+                # Selenium WebDriver support may vary - trying common patterns
+                # Adding launch parameters per docs: https://docs.browserless.io/overview/launch-parameters
+                launch_params = [
+                    "stealth=true",  # Enable stealth mode for bot detection evasion
+                    "headless=false",  # Use headful mode (may help bypass bot detection)
+                    "blockAds=true",  # Block ads for faster loading
+                    "blockConsentModals=true",  # Auto-dismiss cookie banners
+                ]
+                launch_query = "&".join(launch_params)
+                
                 endpoints_to_try = [
-                    f"{base_url}/webdriver?token={browserless_token}",
-                    f"{base_url}/wd/hub?token={browserless_token}",  # Standard Selenium Grid endpoint
-                    f"{base_url}/stealth/webdriver?token={browserless_token}",  # Stealth endpoint (if supported)
+                    f"{base_url}/webdriver?token={browserless_token}&{launch_query}",
+                    f"{base_url}/wd/hub?token={browserless_token}&{launch_query}",  # Standard Selenium Grid
+                    f"{base_url}/webdriver?token={browserless_token}",  # Without launch params as fallback
                 ]
                 
                 driver = None
@@ -95,6 +105,8 @@ class LocationSearcher:
                     try:
                         endpoint_name = browserless_url.split(f"{base_url}/")[1].split("?")[0]
                         print(f"[LocationSearcher] Trying endpoint: {endpoint_name} (region: {region})")
+                        if "stealth=true" in browserless_url:
+                            print(f"[LocationSearcher] Using stealth mode and bot detection evasion features")
                         driver = webdriver.Remote(
                             command_executor=browserless_url,
                             options=chrome_options
