@@ -480,11 +480,30 @@ def get_trulia_status():
         "error": trulia_status["error"]
     })
 
+@app.route('/api/test-search', methods=['GET'])
+def test_search():
+    """Test endpoint to verify server is responding"""
+    print("=" * 80)
+    print(f"[TEST] Test endpoint hit at {datetime.now().isoformat()}")
+    print("=" * 80)
+    import sys
+    sys.stdout.flush()
+    return jsonify({"status": "ok", "message": "Test endpoint working", "timestamp": datetime.now().isoformat()})
+
 @app.route('/api/search-location', methods=['POST', 'GET', 'OPTIONS'])
 def search_location():
     """Search a platform for a location and return the actual listing URL."""
+    # Immediate log to verify endpoint is hit
+    print("=" * 80)
+    print(f"[SEARCH-LOCATION] Endpoint hit at {datetime.now().isoformat()}")
+    print(f"[SEARCH-LOCATION] Method: {request.method}")
+    print(f"[SEARCH-LOCATION] Headers: {dict(request.headers)}")
+    print("=" * 80)
+    add_log(f"SEARCH-LOCATION endpoint hit: method={request.method}", "info")
+    
     # Handle CORS preflight - MUST be first thing we do
     if request.method == 'OPTIONS':
+        add_log("SEARCH-LOCATION: Handling OPTIONS preflight", "info")
         response = jsonify({})
         response.headers.add('Access-Control-Allow-Origin', '*')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
@@ -493,6 +512,8 @@ def search_location():
     
     # Wrap EVERYTHING in try-except to prevent any crash
     import traceback
+    import sys
+    sys.stdout.flush()  # Force flush to ensure logs appear
     
     try:
         try:
@@ -509,12 +530,20 @@ def search_location():
         
         # Get platform and location from request
         try:
+            print(f"[SEARCH-LOCATION] Request JSON: {request.is_json}")
+            print(f"[SEARCH-LOCATION] Request data: {request.json if request.is_json else 'Not JSON'}")
+            print(f"[SEARCH-LOCATION] Request args: {dict(request.args)}")
+            sys.stdout.flush()
+            
             if request.is_json and request.json:
                 platform = request.json.get('platform')
                 location = request.json.get('location')
             else:
                 platform = request.args.get('platform') or (request.form.get('platform') if request.form else None)
                 location = request.args.get('location') or (request.form.get('location') if request.form else None)
+            
+            print(f"[SEARCH-LOCATION] Parsed: platform={platform}, location={location}")
+            sys.stdout.flush()
         except Exception as e:
             add_log(f"Error parsing request: {e}", "error")
             response = jsonify({"error": "Invalid request format"})
@@ -532,6 +561,8 @@ def search_location():
             return response, 400
         
         try:
+            print(f"[SEARCH-LOCATION] Starting search for platform={platform}, location={location}")
+            sys.stdout.flush()
             add_log(f"Starting location search: platform={platform}, location={location}", "info")
             
             # Run the location search with timeout protection

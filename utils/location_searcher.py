@@ -84,8 +84,11 @@ class LocationSearcher:
             logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
             
             driver = cls._get_driver()
+            print(f"[LocationSearcher] Driver created, navigating to Trulia...")
             driver.get("https://www.trulia.com")
+            print(f"[LocationSearcher] Page loaded, waiting 5 seconds...")
             time.sleep(5)  # Wait for page to fully load
+            print(f"[LocationSearcher] Starting search for search box...")
             
             wait = WebDriverWait(driver, 20)
             
@@ -96,18 +99,26 @@ class LocationSearcher:
             
             try:
                 # Try the most reliable selector first
+                print(f"[LocationSearcher] Trying selector: input[data-testid='location-search-input']")
                 search_box = wait.until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "input[data-testid='location-search-input']"))
                 )
                 logger.info(f"[LocationSearcher] Found Trulia search box by data-testid")
-            except TimeoutException:
+                print(f"[LocationSearcher] SUCCESS: Found search box by data-testid")
+            except TimeoutException as e1:
+                print(f"[LocationSearcher] First selector failed: {e1}")
                 try:
                     # Fallback to id
+                    print(f"[LocationSearcher] Trying fallback selector: input#banner-search")
                     search_box = wait.until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, "input#banner-search"))
                     )
                     logger.info(f"[LocationSearcher] Found Trulia search box by id")
-                except TimeoutException:
+                    print(f"[LocationSearcher] SUCCESS: Found search box by id")
+                except TimeoutException as e2:
+                    print(f"[LocationSearcher] FAILED: Both selectors failed")
+                    print(f"[LocationSearcher] First error: {e1}")
+                    print(f"[LocationSearcher] Second error: {e2}")
                     raise TimeoutException("Trulia search box not found - tried data-testid and id")
             
             # Ensure it's visible and enabled
@@ -161,19 +172,29 @@ class LocationSearcher:
             time.sleep(2)
             current_url = driver.current_url
             logger.info(f"[LocationSearcher] Trulia final URL: {current_url}")
+            print(f"[LocationSearcher] Trulia final URL: {current_url}")
+            print(f"[LocationSearcher] URL check: 'trulia.com' in URL = {'trulia.com' in current_url}, URL != homepage = {current_url != 'https://www.trulia.com'}")
             
             if 'trulia.com' in current_url and current_url != 'https://www.trulia.com':
+                print(f"[LocationSearcher] Returning URL: {current_url}")
                 return current_url
             
+            print(f"[LocationSearcher] URL validation failed - returning None")
+            print(f"[LocationSearcher] Current URL was: {current_url}")
             return None
             
         except TimeoutException as e:
             logger.error(f"[LocationSearcher] Timeout: {e}")
+            print(f"[LocationSearcher] TIMEOUT ERROR: {e}")
+            import traceback
+            print(f"[LocationSearcher] TIMEOUT Traceback: {traceback.format_exc()}")
             return None
         except Exception as e:
             logger.error(f"[LocationSearcher] Error searching Trulia: {e}")
             import traceback
             logger.error(f"[LocationSearcher] Traceback: {traceback.format_exc()}")
+            print(f"[LocationSearcher] ERROR: {e}")
+            print(f"[LocationSearcher] Error Traceback: {traceback.format_exc()}")
             return None
         finally:
             if driver:
