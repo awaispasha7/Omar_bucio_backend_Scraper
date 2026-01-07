@@ -462,54 +462,87 @@ def get_trulia_status():
         "error": trulia_status["error"]
     })
 
-@app.route('/api/search-location', methods=['POST', 'GET'])
+@app.route('/api/search-location', methods=['POST', 'GET', 'OPTIONS'])
 def search_location():
     """Search a platform for a location and return the actual listing URL."""
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        response = jsonify({})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+        return response
+    
     from utils.location_searcher import LocationSearcher
+    import traceback
     
     # Get platform and location from request
-    if request.is_json and request.json:
-        platform = request.json.get('platform')
-        location = request.json.get('location')
-    else:
-        platform = request.args.get('platform') or (request.form.get('platform') if request.form else None)
-        location = request.args.get('location') or (request.form.get('location') if request.form else None)
+    try:
+        if request.is_json and request.json:
+            platform = request.json.get('platform')
+            location = request.json.get('location')
+        else:
+            platform = request.args.get('platform') or (request.form.get('platform') if request.form else None)
+            location = request.args.get('location') or (request.form.get('location') if request.form else None)
+    except Exception as e:
+        add_log(f"Error parsing request: {e}", "error")
+        response = jsonify({"error": "Invalid request format"})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 400
     
     if not platform:
-        return jsonify({"error": "Platform parameter is required"}), 400
+        response = jsonify({"error": "Platform parameter is required"})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 400
     
     if not location:
-        return jsonify({"error": "Location parameter is required"}), 400
+        response = jsonify({"error": "Location parameter is required"})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 400
     
     try:
+        add_log(f"Starting location search: platform={platform}, location={location}", "info")
+        
+        # Run the location search
+        # Note: Selenium timeouts are handled in location_searcher.py (20 second waits)
+        # Total search time should be under 30-40 seconds
         url = LocationSearcher.search_platform(platform, location)
         
         if not url:
-            return jsonify({
+            add_log(f"Could not find URL for {platform}/{location}", "warning")
+            response = jsonify({
                 "error": f"Could not find listing URL for '{location}' on {platform}",
                 "platform": platform,
                 "location": location
-            }), 404
+            })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 404
         
         # Validate the URL using URLDetector
         from utils.url_detector import URLDetector
         detected_platform, extracted_location = URLDetector.detect_and_extract(url)
         
-        return jsonify({
+        add_log(f"Location search successful: {platform}/{location} -> {url}", "success")
+        response = jsonify({
             "url": url,
             "platform": detected_platform or platform,
             "location": extracted_location,
             "success": True
         })
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
         
     except Exception as e:
-        import logging
-        logging.error(f"Error searching location: {e}")
-        return jsonify({
+        error_trace = traceback.format_exc()
+        add_log(f"Error searching location: {e}", "error")
+        add_log(f"Traceback: {error_trace}", "error")
+        response = jsonify({
             "error": f"Error searching location: {str(e)}",
             "platform": platform,
             "location": location
-        }), 500
+        })
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response, 500
 
 @app.route('/api/validate-url', methods=['POST', 'GET'])
 def validate_url():
