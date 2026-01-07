@@ -719,266 +719,244 @@ class LocationSearcher:
             # Browserless.io WebSocket endpoint for CDP connection with stealth mode
             browserless_url = f"wss://production-{region}.browserless.io?token={browserless_token}&stealth=true"
             
-            browser = None
-            try:
-                with sync_playwright() as p:
-                    print(f"[LocationSearcher] Connecting to Browserless.io via Playwright CDP...")
-                    print(f"[LocationSearcher] Endpoint: wss://production-{region}.browserless.io (region: {region}, stealth: true)")
-                    
-                    browser = p.chromium.connect_over_cdp(browserless_url)
-                    print(f"[LocationSearcher] Successfully connected to Browserless.io")
-                    
-                    # Create a fresh context with stealth settings
-                    context = browser.new_context(
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                        viewport={"width": 1920, "height": 1080},
-                        locale="en-US",
-                        timezone_id="America/New_York",
-                        permissions=["geolocation"],
-                        extra_http_headers={
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Accept-Encoding": "gzip, deflate, br",
-                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                            "Sec-Fetch-Dest": "document",
-                            "Sec-Fetch-Mode": "navigate",
-                            "Sec-Fetch-Site": "none",
-                            "Upgrade-Insecure-Requests": "1",
-                        }
-                    )
-                    
-                    # Add stealth scripts
-                    context.add_init_script("""
-                        Object.defineProperty(navigator, 'plugins', {
-                            get: () => [1, 2, 3, 4, 5]
-                        });
-                        Object.defineProperty(navigator, 'languages', {
-                            get: () => ['en-US', 'en']
-                        });
-                        Object.defineProperty(navigator, 'webdriver', {
-                            get: () => undefined
-                        });
-                        window.chrome = {
-                            runtime: {}
-                        };
-                    """)
-                    
-                    page = context.new_page()
-                    print(f"[LocationSearcher] Created new page with stealth configuration")
-                    
-            except Exception as connect_error:
-                print(f"[LocationSearcher] Failed to connect to Browserless.io: {connect_error}")
-                import traceback
-                print(f"[LocationSearcher] Connection traceback: {traceback.format_exc()}")
-                return None
-            
-            # Navigate to Apartments.com
-            print(f"[LocationSearcher] Navigating to Apartments.com...")
-            logger.info("[STATUS] Bypassing bot detection... This may take 30-60 seconds")
-            print(f"[LocationSearcher] [STATUS] Bypassing bot detection... This may take 30-60 seconds")
-            
-            try:
-                page.goto("https://www.apartments.com", wait_until="domcontentloaded", timeout=60000)
-                time.sleep(3)  # Wait for page to fully load
-            except Exception as goto_error:
-                if "timeout" in str(goto_error).lower():
-                    logger.warning("[STATUS] Page load timeout - retrying...")
-                    try:
-                        page.goto("https://www.apartments.com", wait_until="networkidle", timeout=90000)
-                        time.sleep(3)
-                    except Exception as retry_error:
-                        logger.error(f"Failed to load Apartments.com after retry: {retry_error}")
-                        raise
-                else:
-                    raise
-            
-            page_title = page.title()
-            current_url = page.url
-            print(f"[LocationSearcher] Page title: {page_title}, URL: {current_url}")
-            
-            # Check if page was blocked
-            if 'access denied' in page_title.lower() or 'blocked' in page_title.lower():
-                print(f"[LocationSearcher] Page still blocked even with Browserless.io")
+            with sync_playwright() as p:
+                print(f"[LocationSearcher] Connecting to Browserless.io via Playwright CDP...")
+                print(f"[LocationSearcher] Endpoint: wss://production-{region}.browserless.io (region: {region}, stealth: true)")
+                
+                browser = p.chromium.connect_over_cdp(browserless_url)
+                print(f"[LocationSearcher] Successfully connected to Browserless.io")
+                
+                # Create a fresh context with stealth settings
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    permissions=["geolocation"],
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept-Encoding": "gzip, deflate, br",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                        "Sec-Fetch-Dest": "document",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Site": "none",
+                        "Upgrade-Insecure-Requests": "1",
+                    }
+                )
+                
+                # Add stealth scripts
+                context.add_init_script("""
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5]
+                    });
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['en-US', 'en']
+                    });
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                    window.chrome = {
+                        runtime: {}
+                    };
+                """)
+                
+                page = context.new_page()
+                print(f"[LocationSearcher] Created new page with stealth configuration")
+                
+                # Navigate to Apartments.com
+                print(f"[LocationSearcher] Navigating to Apartments.com...")
+                logger.info("[STATUS] Bypassing bot detection... This may take 30-60 seconds")
+                print(f"[LocationSearcher] [STATUS] Bypassing bot detection... This may take 30-60 seconds")
+                
                 try:
-                    browser.close()
-                except:
-                    pass
-                return None
-            
-            # Find search box - use the specific ID from HTML
-            print(f"[LocationSearcher] Looking for search box...")
-            logger.info("[STATUS] Locating search box...")
-            
-            search_box = None
-            search_box_selectors = [
-                "input#quickSearchLookup",
-                "input.quickSearchLookup",
-                "input[aria-label='Location, School, or Point of Interest']",
-                "input[placeholder='Location, School, or Point of Interest']",
-            ]
-            
-            for selector in search_box_selectors:
-                try:
-                    search_box = page.query_selector(selector)
-                    if search_box:
+                    page.goto("https://www.apartments.com", wait_until="domcontentloaded", timeout=60000)
+                    time.sleep(3)  # Wait for page to fully load
+                except Exception as goto_error:
+                    if "timeout" in str(goto_error).lower():
+                        logger.warning("[STATUS] Page load timeout - retrying...")
                         try:
-                            if search_box.is_visible():
-                                print(f"[LocationSearcher] ✓ Found search box: {selector}")
-                                break
-                        except:
-                            print(f"[LocationSearcher] ✓ Found search box (visibility uncertain): {selector}")
-                            break
-                except:
-                    continue
-            
-            if not search_box:
-                print(f"[LocationSearcher] Search box not found")
-                try:
-                    browser.close()
-                except:
-                    pass
-                return None
-            
-            # Get initial URL
-            initial_url = page.url
-            print(f"[LocationSearcher] Initial URL: {initial_url}")
-            
-            # Fill search box
-            print(f"[LocationSearcher] Entering location '{location_clean}' into search box...")
-            logger.info(f"[STATUS] Searching for: {location_clean}")
-            search_box.click()
-            time.sleep(0.5)
-            search_box.fill("")  # Clear
-            search_box.fill(location_clean)  # Type location
-            time.sleep(2.5)  # Wait for autocomplete suggestions
-            
-            search_submitted = False
-            
-            # Method 1: Click first autocomplete suggestion (preferred)
-            try:
-                # Wait for suggestions
-                time.sleep(1)
-                suggestion_selectors = [
-                    "ul[role='listbox'] li",
-                    "div[role='listbox'] div",
-                    "ul[class*='autocomplete'] li",
-                    "li[class*='suggestion']",
-                    "div[role='option']",
+                            page.goto("https://www.apartments.com", wait_until="networkidle", timeout=90000)
+                            time.sleep(3)
+                        except Exception as retry_error:
+                            logger.error(f"Failed to load Apartments.com after retry: {retry_error}")
+                            return None
+                    else:
+                        return None
+                
+                page_title = page.title()
+                current_url = page.url
+                print(f"[LocationSearcher] Page title: {page_title}, URL: {current_url}")
+                
+                # Check if page was blocked
+                if 'access denied' in page_title.lower() or 'blocked' in page_title.lower():
+                    print(f"[LocationSearcher] Page still blocked even with Browserless.io")
+                    return None
+                
+                # Find search box - use the specific ID from HTML
+                print(f"[LocationSearcher] Looking for search box...")
+                logger.info("[STATUS] Locating search box...")
+                
+                search_box = None
+                search_box_selectors = [
+                    "input#quickSearchLookup",
+                    "input.quickSearchLookup",
+                    "input[aria-label='Location, School, or Point of Interest']",
+                    "input[placeholder='Location, School, or Point of Interest']",
                 ]
                 
-                suggestion = None
-                for selector in suggestion_selectors:
+                for selector in search_box_selectors:
                     try:
-                        suggestions = page.query_selector_all(selector)
-                        if suggestions:
-                            for sug in suggestions:
-                                try:
-                                    if sug.is_visible():
-                                        text = sug.inner_text().lower()
-                                        # Skip generic suggestions
-                                        if any(skip in text for skip in ['current location', 'popular searches']):
-                                            continue
-                                        # If it contains our location or looks like a location
-                                        if location_clean.lower() in text or ',' in text:
-                                            suggestion = sug
-                                            print(f"[LocationSearcher] Found suggestion: {text[:50]}")
-                                            break
-                                except:
-                                    continue
-                            if suggestion:
+                        search_box = page.query_selector(selector)
+                        if search_box:
+                            try:
+                                if search_box.is_visible():
+                                    print(f"[LocationSearcher] ✓ Found search box: {selector}")
+                                    break
+                            except:
+                                print(f"[LocationSearcher] ✓ Found search box (visibility uncertain): {selector}")
                                 break
                     except:
                         continue
                 
-                if suggestion:
-                    print(f"[LocationSearcher] Clicking first autocomplete suggestion...")
-                    suggestion.click()
-                    search_submitted = True
-                    time.sleep(3)  # Wait for navigation
-            except Exception as sug_err:
-                print(f"[LocationSearcher] Error with suggestions: {sug_err}")
+                if not search_box:
+                    print(f"[LocationSearcher] Search box not found")
+                    return None
             
-            # Method 2: Click search button (button.typeaheadSearch) - Enter key does NOT work
-            if not search_submitted:
+                # Get initial URL
+                initial_url = page.url
+                print(f"[LocationSearcher] Initial URL: {initial_url}")
+                
+                # Fill search box
+                print(f"[LocationSearcher] Entering location '{location_clean}' into search box...")
+                logger.info(f"[STATUS] Searching for: {location_clean}")
+                search_box.click()
+                time.sleep(0.5)
+                search_box.fill("")  # Clear
+                search_box.fill(location_clean)  # Type location
+                time.sleep(2.5)  # Wait for autocomplete suggestions
+                
+                search_submitted = False
+                
+                # Method 1: Click first autocomplete suggestion (preferred)
                 try:
-                    search_button = page.query_selector("button.typeaheadSearch")
-                    if search_button and search_button.is_visible():
-                        print(f"[LocationSearcher] Clicking search button (typeaheadSearch)...")
-                        logger.info("[STATUS] Submitting search...")
-                        search_button.click()
+                    # Wait for suggestions
+                    time.sleep(1)
+                    suggestion_selectors = [
+                        "ul[role='listbox'] li",
+                        "div[role='listbox'] div",
+                        "ul[class*='autocomplete'] li",
+                        "li[class*='suggestion']",
+                        "div[role='option']",
+                    ]
+                    
+                    suggestion = None
+                    for selector in suggestion_selectors:
+                        try:
+                            suggestions = page.query_selector_all(selector)
+                            if suggestions:
+                                for sug in suggestions:
+                                    try:
+                                        if sug.is_visible():
+                                            text = sug.inner_text().lower()
+                                            # Skip generic suggestions
+                                            if any(skip in text for skip in ['current location', 'popular searches']):
+                                                continue
+                                            # If it contains our location or looks like a location
+                                            if location_clean.lower() in text or ',' in text:
+                                                suggestion = sug
+                                                print(f"[LocationSearcher] Found suggestion: {text[:50]}")
+                                                break
+                                    except:
+                                        continue
+                                if suggestion:
+                                    break
+                        except:
+                            continue
+                    
+                    if suggestion:
+                        print(f"[LocationSearcher] Clicking first autocomplete suggestion...")
+                        suggestion.click()
                         search_submitted = True
                         time.sleep(3)  # Wait for navigation
-                    else:
-                        # Try alternative button selectors
-                        alt_selectors = [
-                            "button[title*='Search apartments']",
-                            "button[aria-label*='Search apartments']",
-                            "button[class*='search']",
-                        ]
-                        for selector in alt_selectors:
-                            try:
-                                btn = page.query_selector(selector)
-                                if btn and btn.is_visible():
-                                    print(f"[LocationSearcher] Clicking alternative search button: {selector}")
-                                    btn.click()
-                                    search_submitted = True
-                                    time.sleep(3)
-                                    break
-                            except:
-                                continue
-                except Exception as btn_err:
-                    print(f"[LocationSearcher] Error clicking search button: {btn_err}")
-            
-            # Wait for navigation and get final URL
-            print(f"[LocationSearcher] Waiting for navigation...")
-            logger.info("[STATUS] Waiting for page to redirect...")
-            
-            final_url = None
-            max_wait_seconds = 10
-            check_interval = 0.3
-            max_checks = int(max_wait_seconds / check_interval)
-            
-            for check_attempt in range(max_checks):
-                time.sleep(check_interval)
-                try:
-                    if page.is_closed():
-                        print(f"[LocationSearcher] Page closed during URL polling")
-                        break
-                    
-                    current_check_url = page.url
-                    if current_check_url != initial_url and 'apartments.com' in current_check_url:
-                        final_url = current_check_url
-                        elapsed = (check_attempt + 1) * check_interval
-                        print(f"[LocationSearcher] ✓ URL change detected after {elapsed:.1f}s! {initial_url} → {final_url}")
-                        break
-                    elif check_attempt == max_checks - 1:
-                        print(f"[LocationSearcher] URL did not change after {max_wait_seconds}s. Still at: {current_check_url}")
-                        final_url = current_check_url
-                except Exception as poll_err:
-                    if 'closed' in str(poll_err).lower():
-                        break
-                    print(f"[LocationSearcher] Error checking URL: {poll_err}")
-            
-            # Get final URL
-            if not final_url:
-                try:
-                    if not page.is_closed():
-                        final_url = page.url
-                except:
-                    pass
-            
-            # Close browser
-            try:
-                browser.close()
-            except:
-                pass
-            
-            # Return URL if valid
-            if final_url and 'apartments.com' in final_url and final_url != 'https://www.apartments.com' and final_url != 'https://www.apartments.com/':
-                print(f"[LocationSearcher] ✓ Success! Returning URL: {final_url}")
-                return final_url
-            
-            print(f"[LocationSearcher] Could not find URL for {location_clean} on Apartments.com")
-            return None
+                except Exception as sug_err:
+                    print(f"[LocationSearcher] Error with suggestions: {sug_err}")
+                
+                # Method 2: Click search button (button.typeaheadSearch) - Enter key does NOT work
+                if not search_submitted:
+                    try:
+                        search_button = page.query_selector("button.typeaheadSearch")
+                        if search_button and search_button.is_visible():
+                            print(f"[LocationSearcher] Clicking search button (typeaheadSearch)...")
+                            logger.info("[STATUS] Submitting search...")
+                            search_button.click()
+                            search_submitted = True
+                            time.sleep(3)  # Wait for navigation
+                        else:
+                            # Try alternative button selectors
+                            alt_selectors = [
+                                "button[title*='Search apartments']",
+                                "button[aria-label*='Search apartments']",
+                                "button[class*='search']",
+                            ]
+                            for selector in alt_selectors:
+                                try:
+                                    btn = page.query_selector(selector)
+                                    if btn and btn.is_visible():
+                                        print(f"[LocationSearcher] Clicking alternative search button: {selector}")
+                                        btn.click()
+                                        search_submitted = True
+                                        time.sleep(3)
+                                        break
+                                except:
+                                    continue
+                    except Exception as btn_err:
+                        print(f"[LocationSearcher] Error clicking search button: {btn_err}")
+                
+                # Wait for navigation and get final URL
+                print(f"[LocationSearcher] Waiting for navigation...")
+                logger.info("[STATUS] Waiting for page to redirect...")
+                
+                final_url = None
+                max_wait_seconds = 10
+                check_interval = 0.3
+                max_checks = int(max_wait_seconds / check_interval)
+                
+                for check_attempt in range(max_checks):
+                    time.sleep(check_interval)
+                    try:
+                        if page.is_closed():
+                            print(f"[LocationSearcher] Page closed during URL polling")
+                            break
+                        
+                        current_check_url = page.url
+                        if current_check_url != initial_url and 'apartments.com' in current_check_url:
+                            final_url = current_check_url
+                            elapsed = (check_attempt + 1) * check_interval
+                            print(f"[LocationSearcher] ✓ URL change detected after {elapsed:.1f}s! {initial_url} → {final_url}")
+                            break
+                        elif check_attempt == max_checks - 1:
+                            print(f"[LocationSearcher] URL did not change after {max_wait_seconds}s. Still at: {current_check_url}")
+                            final_url = current_check_url
+                    except Exception as poll_err:
+                        if 'closed' in str(poll_err).lower():
+                            break
+                        print(f"[LocationSearcher] Error checking URL: {poll_err}")
+                
+                # Get final URL
+                if not final_url:
+                    try:
+                        if not page.is_closed():
+                            final_url = page.url
+                    except:
+                        pass
+                
+                # Return URL if valid (all operations must be inside the 'with' block)
+                if final_url and 'apartments.com' in final_url and final_url != 'https://www.apartments.com' and final_url != 'https://www.apartments.com/':
+                    print(f"[LocationSearcher] ✓ Success! Returning URL: {final_url}")
+                    return final_url
+                
+                print(f"[LocationSearcher] Could not find URL for {location_clean} on Apartments.com")
+                return None
             
         except ImportError:
             print("[LocationSearcher] Playwright not installed - cannot use Browserless.io for Apartments.com")
@@ -988,12 +966,6 @@ class LocationSearcher:
             import traceback
             print(f"[LocationSearcher] Traceback: {traceback.format_exc()}")
             return None
-        finally:
-            if browser:
-                try:
-                    browser.close()
-                except:
-                    pass
     
     @classmethod
     def search_redfin(cls, location: str) -> Optional[str]:
