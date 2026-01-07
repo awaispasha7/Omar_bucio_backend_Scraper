@@ -93,30 +93,34 @@ class LocationSearcher:
             wait = WebDriverWait(driver, 15)
             
             # Trulia search box strategies (in order of reliability):
-            # 1. Look for input by structural position (usually the main hero search box)
-            # 2. Look for input by id/class patterns
-            # 3. Look for input by aria-label
-            # 4. Click on visible inputs to reveal placeholder
-            # 5. Fallback to any visible text input in the hero/search area
+            # Based on actual HTML structure:
+            # - data-testid="location-search-input" (most reliable)
+            # - id="banner-search" (very reliable)
+            # - aria-label="Search for City, Neighborhood, Zip, County, School"
+            # - class contains "react-autosuggest__input"
             
             search_box = None
             
-            # Strategy 1: Look for input by specific selectors (most reliable)
+            # Strategy 1: Look for input by specific identifiers (most reliable - from actual HTML)
             search_selectors = [
-                # Common Trulia search box identifiers
+                # Most reliable: data-testid (from actual Trulia HTML)
+                "input[data-testid='location-search-input']",
+                'input[data-testid="location-search-input"]',
+                # Very reliable: id (from actual Trulia HTML)
+                "input#banner-search",
+                # Reliable: aria-label (from actual Trulia HTML)
+                "input[aria-label*='Search for City, Neighborhood, Zip, County, School']",
+                "input[aria-label*='Search for City']",
+                # Class-based (from actual Trulia HTML)
+                "input.react-autosuggest__input",
+                "input[class*='react-autosuggest__input']",
+                # Fallback selectors
                 "input[type='text'][aria-label*='search']",
                 "input[type='text'][aria-label*='Search']",
                 "input[type='text'][id*='search']",
                 "input[type='text'][name*='search']",
                 "input[type='text'][class*='Search']",
                 "input[type='text'][class*='search']",
-                # Hero area search box (usually has specific classes)
-                "div[class*='Hero'] input[type='text']",
-                "div[class*='hero'] input[type='text']",
-                "div[class*='SearchBox'] input[type='text']",
-                "div[class*='search'] input[type='text']",
-                # Form-based selectors
-                "form input[type='text']",
             ]
             
             for selector in search_selectors:
@@ -200,64 +204,115 @@ class LocationSearcher:
             except:
                 pass  # Continue even if click fails
             
-            # Clear any existing text and enter location
-            search_box.clear()
+            # Clear any existing text (click clear button if exists, or manually clear)
+            try:
+                # Try clicking the clear button first (data-testid="location-search-clear")
+                clear_button = driver.find_elements(By.CSS_SELECTOR, "[data-testid='location-search-clear']")
+                if clear_button and clear_button[0].is_displayed():
+                    clear_button[0].click()
+                    time.sleep(0.3)
+                else:
+                    search_box.clear()
+            except:
+                search_box.clear()
+            
             time.sleep(0.5)
             search_box.send_keys(location_clean)
             logger.info(f"[LocationSearcher] Entered '{location_clean}' into Trulia search box")
             time.sleep(2.5)  # Wait for autocomplete suggestions to appear
             
             # Wait for and click the first autocomplete suggestion
+            # Based on actual HTML: id="react-autowhatever-home-banner" role="listbox"
             try:
-                # Wait for suggestions to appear - try multiple selectors
+                # Wait for suggestions container to appear (from actual HTML)
                 suggestion_selectors = [
+                    # Most specific: from actual HTML structure
+                    "#react-autowhatever-home-banner[role='listbox'] li",
+                    "#react-autowhatever-home-banner[role='listbox'] div",
+                    # General listbox selectors
+                    "[role='listbox'] li",
+                    "[role='listbox'] div[role='option']",
+                    "[id*='react-autowhatever'] li",
+                    "[id*='react-autowhatever'] div",
+                    # Class-based (from actual HTML)
+                    ".react-autosuggest__suggestions-container li",
+                    ".react-autosuggest__suggestions-container div",
+                    # Fallback selectors
                     "ul[role='listbox'] li",
-                    "div[role='listbox'] div[role='option']",
-                    "ul[class*='autocomplete'] li",
-                    "div[class*='autocomplete'] div",
+                    "div[role='listbox'] div",
+                    "div[class*='autocomplete'] li",
                     "div[class*='suggestion']",
-                    "li[class*='suggestion']",
-                    "div[class*='SearchAutocomplete'] div",
-                    "div[class*='search'] div[class*='option']"
                 ]
                 
                 suggestions = []
                 for selector in suggestion_selectors:
                     try:
-                        suggestions = WebDriverWait(driver, 3).until(
-                            EC.presence_of_all_elements_located((By.CSS_SELECTOR, selector))
+                        # Wait for suggestions container to be visible
+                        suggestions_container = WebDriverWait(driver, 2).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "[role='listbox'], .react-autosuggest__suggestions-container"))
                         )
+                        # Wait a bit more for suggestions to populate
+                        time.sleep(0.5)
+                        
+                        suggestions = driver.find_elements(By.CSS_SELECTOR, selector)
                         if suggestions and len(suggestions) > 0:
                             logger.info(f"[LocationSearcher] Found {len(suggestions)} autocomplete suggestions using selector: {selector}")
                             break
                     except TimeoutException:
+                        continue
+                    except Exception:
                         continue
                 
                 if suggestions and len(suggestions) > 0:
                     # Filter to only visible suggestions
                     visible_suggestions = [s for s in suggestions if s.is_displayed()]
                     if visible_suggestions:
-                        logger.info(f"[LocationSearcher] Clicking first visible suggestion: {visible_suggestions[0].text[:50]}...")
+                        suggestion_text = visible_suggestions[0].text.strip()
+                        logger.info(f"[LocationSearcher] Clicking first visible suggestion: {suggestion_text[:50]}...")
                         visible_suggestions[0].click()
                         time.sleep(3)  # Wait for redirect after clicking
                     else:
-                        logger.info(f"[LocationSearcher] No visible suggestions, pressing Enter key")
+                        # No visible suggestions, try submit button or Enter
+                        logger.info(f"[LocationSearcher] No visible suggestions, trying submit button")
+                        try:
+                            submit_button = driver.find_element(By.CSS_SELECTOR, "[data-testid='location-search-button'], [aria-label='submit search']")
+                            submit_button.click()
+                            time.sleep(3)
+                        except:
+                            search_box.send_keys(Keys.RETURN)
+                            time.sleep(3)
+                else:
+                    # No suggestions found, try submit button or Enter key
+                    logger.info(f"[LocationSearcher] No suggestions found, trying submit button")
+                    try:
+                        submit_button = driver.find_element(By.CSS_SELECTOR, "[data-testid='location-search-button'], [aria-label='submit search']")
+                        submit_button.click()
+                        time.sleep(3)
+                    except:
+                        logger.info(f"[LocationSearcher] Submit button not found, pressing Enter key")
                         search_box.send_keys(Keys.RETURN)
                         time.sleep(3)
-                else:
-                    # No suggestions, try Enter key
-                    logger.info(f"[LocationSearcher] No suggestions found, pressing Enter key")
+            except TimeoutException:
+                # Suggestions didn't appear, try submit button or Enter key
+                logger.info(f"[LocationSearcher] Suggestions timeout, trying submit button")
+                try:
+                    submit_button = driver.find_element(By.CSS_SELECTOR, "[data-testid='location-search-button'], [aria-label='submit search']")
+                    submit_button.click()
+                    time.sleep(3)
+                except:
+                    logger.info(f"[LocationSearcher] Submit button not found, pressing Enter key")
                     search_box.send_keys(Keys.RETURN)
                     time.sleep(3)
-            except TimeoutException:
-                # Suggestions didn't appear, try Enter key
-                logger.info(f"[LocationSearcher] Suggestions timeout, pressing Enter key")
-                search_box.send_keys(Keys.RETURN)
-                time.sleep(3)
             except Exception as e:
-                logger.warning(f"[LocationSearcher] Error with suggestions: {e}, using Enter key")
-                search_box.send_keys(Keys.RETURN)
-                time.sleep(3)
+                logger.warning(f"[LocationSearcher] Error with suggestions: {e}, trying submit button")
+                try:
+                    submit_button = driver.find_element(By.CSS_SELECTOR, "[data-testid='location-search-button'], [aria-label='submit search']")
+                    submit_button.click()
+                    time.sleep(3)
+                except:
+                    logger.warning(f"[LocationSearcher] Submit button failed, using Enter key")
+                    search_box.send_keys(Keys.RETURN)
+                    time.sleep(3)
             
             # Get the final URL after redirect
             time.sleep(2)  # Extra wait for redirect
