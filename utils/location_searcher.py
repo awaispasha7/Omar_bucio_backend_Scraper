@@ -1,13 +1,14 @@
 """
 Location Search Utilities
 Searches platforms to get the actual listing URL from a location name
-Uses Selenium to actually interact with search boxes like a real user
+Hybrid approach: Uses Selenium first, falls back to Playwright with Browserless.io if bot detection occurs
 """
 
 import re
 import time
 from typing import Optional
 import logging
+import os
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -29,129 +30,75 @@ class LocationSearcher:
         import sys
         
         chrome_options = Options()
-        chrome_options.add_argument('--headless=new')  # Use new headless mode
+        
+        # Use headful mode (not headless) - many sites detect headless browsers
+        # Note: In cloud environments, you won't see the GUI, but it helps bypass detection
+        chrome_options.add_argument('--headless=new')  # Can try headless=new for better compatibility
+        
+        # Standard options
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920,1080')
+        
+        # Enhanced bot evasion - remove automation signals
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-        
-        # Use a more recent, realistic user agent
-        chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
-        # Additional stealth options to avoid bot detection
-        chrome_options.add_argument('--disable-web-security')
-        chrome_options.add_argument('--disable-features=IsolateOrigins,site-per-process')
-        chrome_options.add_argument('--disable-site-isolation-trials')
-        chrome_options.add_argument('--disable-extensions')
-        chrome_options.add_argument('--disable-plugins')
-        
-        # Remove automation indicators
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         
-        # Add stealth capabilities
+        # Use a realistic, recent user agent
+        chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        
+        # Additional stealth options
+        chrome_options.add_argument('--disable-web-security')
+        chrome_options.add_argument('--disable-features=IsolateOrigins,site-per-process')
+        chrome_options.add_argument('--disable-site-isolation-trials')
+        chrome_options.add_argument('--lang=en-US,en')
+        chrome_options.add_argument('--accept-lang=en-US,en')
+        
+        # Preferences to make browser look more human
         prefs = {
             "profile.default_content_setting_values": {
                 "notifications": 2,
                 "geolocation": 2,
             },
             "profile.managed_default_content_settings": {
-                "images": 2  # Block images for faster loading
-            }
+                "images": 1  # Allow images (some sites check for this)
+            },
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False
         }
         chrome_options.add_experimental_option("prefs", prefs)
         
-        # Check for Browserless.io token
+        # Note: Browserless.io V2+ does NOT support Selenium WebDriver
+        # They only support Puppeteer/Playwright via WebSocket
+        # If you want to use Browserless.io, you'd need to switch to Playwright
+        # For now, we'll use local Chrome with enhanced bot evasion
+        
         browserless_token = os.getenv("BROWSERLESS_TOKEN")
+        if browserless_token:
+            print("[LocationSearcher] WARNING: BROWSERLESS_TOKEN is set, but Browserless.io V2+ does not support Selenium WebDriver")
+            print("[LocationSearcher] Browserless.io only supports Puppeteer/Playwright. Falling back to local Chrome.")
+            print("[LocationSearcher] To use Browserless.io, you would need to migrate to Playwright.")
+            print("[LocationSearcher] See: https://docs.browserless.io/overview/connection-urls")
         
         try:
-            if browserless_token:
-                browserless_token = browserless_token.strip()  # Remove any whitespace
-                logger.info("[LocationSearcher] Connecting to Browserless.io...")
-                print("[LocationSearcher] BROWSERLESS_TOKEN found - Using Browserless.io for browser automation")
-                print(f"[LocationSearcher] Token length: {len(browserless_token)} characters")
-                print(f"[LocationSearcher] Token starts with: {browserless_token[:10]}...")
+            # Always use local Chrome/Chromium with enhanced bot evasion
+            print("[LocationSearcher] Using local Chrome/Chromium with enhanced bot evasion")
+            service = Service()
+            if sys.platform.startswith('linux'):
+                chrome_binary = '/usr/bin/chromium'
+                chrome_driver = '/usr/bin/chromedriver'
                 
-                # Use the correct Browserless.io WebDriver endpoint
-                # According to docs: https://docs.browserless.io/overview/connection-urls#rest-apis
-                # For Selenium WebDriver, use the production endpoint with /webdriver path
-                # Default to US West (SFO) - can be changed via BROWSERLESS_REGION env var
-                region = os.getenv("BROWSERLESS_REGION", "sfo").lower()  # sfo, lon, ams
-                base_url = f"https://production-{region}.browserless.io"
-                
-                # Try multiple endpoint formats with launch parameters
-                # Note: Browserless.io primarily supports Puppeteer/Playwright via WebSocket
-                # Selenium WebDriver support may vary - trying common patterns
-                # Adding launch parameters per docs: https://docs.browserless.io/overview/launch-parameters
-                launch_params = [
-                    "stealth=true",  # Enable stealth mode for bot detection evasion
-                    "headless=false",  # Use headful mode (may help bypass bot detection)
-                    "blockAds=true",  # Block ads for faster loading
-                    "blockConsentModals=true",  # Auto-dismiss cookie banners
-                ]
-                launch_query = "&".join(launch_params)
-                
-                endpoints_to_try = [
-                    f"{base_url}/webdriver?token={browserless_token}&{launch_query}",
-                    f"{base_url}/wd/hub?token={browserless_token}&{launch_query}",  # Standard Selenium Grid
-                    f"{base_url}/webdriver?token={browserless_token}",  # Without launch params as fallback
-                ]
-                
-                driver = None
-                last_error = None
-                
-                for browserless_url in endpoints_to_try:
-                    try:
-                        endpoint_name = browserless_url.split(f"{base_url}/")[1].split("?")[0]
-                        print(f"[LocationSearcher] Trying endpoint: {endpoint_name} (region: {region})")
-                        if "stealth=true" in browserless_url:
-                            print(f"[LocationSearcher] Using stealth mode and bot detection evasion features")
-                        driver = webdriver.Remote(
-                            command_executor=browserless_url,
-                            options=chrome_options
-                        )
-                        print(f"[LocationSearcher] Successfully connected to Browserless.io via {endpoint_name}")
-                        break
-                    except Exception as e:
-                        last_error = e
-                        error_msg = str(e)
-                        endpoint_name = browserless_url.split(f"{base_url}/")[1].split("?")[0]
-                        print(f"[LocationSearcher] Endpoint {endpoint_name} failed: {error_msg[:150]}")
-                        # If it's an auth error, don't try other endpoints
-                        if "Invalid API key" in error_msg or "401" in error_msg or "403" in error_msg or "Unauthorized" in error_msg:
-                            print("[LocationSearcher] Authentication error detected - stopping endpoint attempts")
-                            raise
-                        continue
-                
-                if driver is None:
-                    error_msg = str(last_error) if last_error else "Unknown error"
-                    print(f"[LocationSearcher] All endpoint formats failed. Last error: {error_msg}")
-                    if "Invalid API key" in error_msg or "401" in error_msg or "403" in error_msg:
-                        print("[LocationSearcher] ERROR: Authentication failed. Please verify:")
-                        print("[LocationSearcher]   1. The token is correct in your Browserless.io dashboard")
-                        print("[LocationSearcher]   2. There are no extra spaces in Railway BROWSERLESS_TOKEN variable")
-                        print("[LocationSearcher]   3. The token is active and has available credits")
-                        print("[LocationSearcher]   4. Check: https://www.browserless.io/dashboard for your API token")
-                        print("[LocationSearcher]   5. Note: Selenium WebDriver endpoint format may differ - check Browserless.io docs")
-                    raise Exception(f"Could not connect to Browserless.io with any endpoint format: {error_msg}")
-            else:
-                print("[LocationSearcher] No BROWSERLESS_TOKEN found - Using local Chrome/Chromium")
-                service = Service()
-                if sys.platform.startswith('linux'):
-                    chrome_binary = '/usr/bin/chromium'
-                    chrome_driver = '/usr/bin/chromedriver'
-                    
-                    if os.path.exists(chrome_binary) and os.path.exists(chrome_driver):
-                        chrome_options.binary_location = chrome_binary
-                        service = Service(executable_path=chrome_driver)
-                        logger.info(f"[LocationSearcher] Using system Chromium ({chrome_binary}) and Driver ({chrome_driver})")
-                    elif os.path.exists(chrome_binary):
-                        chrome_options.binary_location = chrome_binary
-                        logger.info(f"[LocationSearcher] Using system Chromium ({chrome_binary})")
-                
-                driver = webdriver.Chrome(service=service, options=chrome_options)
+                if os.path.exists(chrome_binary) and os.path.exists(chrome_driver):
+                    chrome_options.binary_location = chrome_binary
+                    service = Service(executable_path=chrome_driver)
+                    logger.info(f"[LocationSearcher] Using system Chromium ({chrome_binary}) and Driver ({chrome_driver})")
+                elif os.path.exists(chrome_binary):
+                    chrome_options.binary_location = chrome_binary
+                    logger.info(f"[LocationSearcher] Using system Chromium ({chrome_binary})")
             
+            driver = webdriver.Chrome(service=service, options=chrome_options)
             driver.maximize_window()
             
             # Execute script to remove webdriver property (anti-detection)
@@ -169,22 +116,158 @@ class LocationSearcher:
             return driver
         except Exception as e:
             logger.error(f"[LocationSearcher] Failed to initialize WebDriver: {e}")
-            raise Exception(f"Could not initialize browser: {str(e)}. Please ensure Chrome/Chromium is installed or BROWSERLESS_TOKEN is set.")
+            raise Exception(f"Could not initialize browser: {str(e)}. Please ensure Chrome/Chromium is installed.")
+    
+    @classmethod
+    def _search_trulia_with_playwright(cls, location: str) -> Optional[str]:
+        """
+        Search Trulia using Playwright with Browserless.io (fallback when bot detected)
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            browserless_token = os.getenv("BROWSERLESS_TOKEN")
+            if not browserless_token:
+                print("[LocationSearcher] No BROWSERLESS_TOKEN - cannot use Playwright fallback")
+                return None
+            
+            browserless_token = browserless_token.strip()
+            location_clean = location.strip()
+            print(f"[LocationSearcher] Trying Playwright with Browserless.io for: {location_clean}")
+            
+            # Get region (default: sfo)
+            region = os.getenv("BROWSERLESS_REGION", "sfo").lower()
+            if region not in ["sfo", "lon", "ams"]:
+                region = "sfo"
+            
+            # Browserless.io WebSocket endpoint for CDP connection
+            # Format: wss://production-{region}.browserless.io?token={token}
+            browserless_url = f"wss://production-{region}.browserless.io?token={browserless_token}"
+            
+            with sync_playwright() as p:
+                print(f"[LocationSearcher] Connecting to Browserless.io via Playwright CDP...")
+                print(f"[LocationSearcher] Endpoint: wss://production-{region}.browserless.io (region: {region})")
+                
+                try:
+                    # Connect to Browserless.io via CDP
+                    browser = p.chromium.connect_over_cdp(browserless_url)
+                    print(f"[LocationSearcher] Successfully connected to Browserless.io")
+                    
+                    # Get or create a context
+                    if browser.contexts:
+                        context = browser.contexts[0]
+                        print(f"[LocationSearcher] Using existing browser context")
+                    else:
+                        context = browser.new_context()
+                        print(f"[LocationSearcher] Created new browser context")
+                    
+                    page = context.new_page()
+                    print(f"[LocationSearcher] Created new page")
+                    
+                except Exception as connect_error:
+                    print(f"[LocationSearcher] Failed to connect to Browserless.io: {connect_error}")
+                    import traceback
+                    print(f"[LocationSearcher] Connection traceback: {traceback.format_exc()}")
+                    return None
+                
+                print(f"[LocationSearcher] Navigating to Trulia...")
+                page.goto("https://www.trulia.com", wait_until="networkidle", timeout=30000)
+                time.sleep(3)
+                
+                page_title = page.title()
+                current_url = page.url
+                print(f"[LocationSearcher] Page title: {page_title}, URL: {current_url}")
+                
+                # Check if blocked
+                if "denied" in page_title.lower() or "captcha" in page_title.lower() or "blocked" in page_title.lower():
+                    print(f"[LocationSearcher] Still blocked even with Browserless.io")
+                    browser.close()
+                    return None
+                
+                # Find search box using Playwright
+                search_box = None
+                selectors_to_try = [
+                    "input[data-testid='location-search-input']",
+                    "input#banner-search",
+                    "input[aria-label*='Search for City']",
+                ]
+                
+                for selector in selectors_to_try:
+                    try:
+                        search_box = page.query_selector(selector)
+                        if search_box and search_box.is_visible():
+                            print(f"[LocationSearcher] Found search box with selector: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if not search_box:
+                    print(f"[LocationSearcher] Could not find search box with Playwright")
+                    browser.close()
+                    return None
+                
+                # Clear and type location
+                search_box.click()
+                search_box.fill("")  # Clear
+                search_box.fill(location_clean)
+                print(f"[LocationSearcher] Entered '{location_clean}' into search box")
+                time.sleep(2)
+                
+                # Wait for suggestions and click first one, or press Enter
+                try:
+                    # Try to find and click first suggestion
+                    suggestions = page.query_selector_all("#react-autowhatever-home-banner li, .react-autosuggest__suggestions-container li")
+                    if suggestions:
+                        visible_suggestions = [s for s in suggestions if s.is_visible()]
+                        if visible_suggestions:
+                            print(f"[LocationSearcher] Clicking first suggestion: {visible_suggestions[0].inner_text()[:50]}")
+                            visible_suggestions[0].click()
+                            time.sleep(3)
+                        else:
+                            search_box.press("Enter")
+                            time.sleep(3)
+                    else:
+                        search_box.press("Enter")
+                        time.sleep(3)
+                except:
+                    search_box.press("Enter")
+                    time.sleep(3)
+                
+                # Get final URL
+                time.sleep(2)
+                final_url = page.url
+                print(f"[LocationSearcher] Playwright final URL: {final_url}")
+                
+                browser.close()
+                
+                if 'trulia.com' in final_url and final_url != 'https://www.trulia.com':
+                    return final_url
+                
+                return None
+                
+        except ImportError:
+            print("[LocationSearcher] Playwright not installed - cannot use Browserless.io fallback")
+            print("[LocationSearcher] Install with: pip install playwright && playwright install chromium")
+            return None
         except Exception as e:
-            logger.error(f"[LocationSearcher] Failed to initialize WebDriver: {e}")
-            raise Exception(f"Could not initialize browser: {str(e)}. Please ensure Chrome/Chromium is installed or BROWSERLESS_TOKEN is set.")
+            print(f"[LocationSearcher] Playwright fallback error: {e}")
+            import traceback
+            print(f"[LocationSearcher] Playwright traceback: {traceback.format_exc()}")
+            return None
     
     @classmethod
     def search_trulia(cls, location: str) -> Optional[str]:
         """
         Search Trulia for a location using their search box.
-        Simple approach: Find input, type location, press Enter.
+        Hybrid approach: Try Selenium first, fallback to Playwright with Browserless.io if bot detected.
         """
+        location_clean = location.strip()
+        logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
+        
+        # First attempt: Try with Selenium
         driver = None
         try:
-            location_clean = location.strip()
-            logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
-            
+            print(f"[LocationSearcher] Attempt 1: Trying with Selenium...")
             driver = cls._get_driver()
             print(f"[LocationSearcher] Driver created, navigating to Trulia...")
             driver.get("https://www.trulia.com")
@@ -196,6 +279,16 @@ class LocationSearcher:
             current_url = driver.current_url
             print(f"[LocationSearcher] Page title: {page_title}")
             print(f"[LocationSearcher] Current URL: {current_url}")
+            
+            # Check if blocked by bot detection
+            if "denied" in page_title.lower() or "captcha" in page_title.lower() or "blocked" in page_title.lower():
+                print(f"[LocationSearcher] Bot detection detected with Selenium: {page_title}")
+                print(f"[LocationSearcher] Falling back to Playwright with Browserless.io...")
+                driver.quit()
+                driver = None
+                
+                # Fallback to Playwright
+                return cls._search_trulia_with_playwright(location_clean)
             
             # Try to get page source length to verify page loaded
             try:
@@ -280,6 +373,15 @@ class LocationSearcher:
                     print(f"[LocationSearcher] Fallback search failed: {e}")
             
             if not search_box:
+                # Check again if blocked (maybe search box was hidden by CAPTCHA)
+                page_title_check = driver.title
+                if "denied" in page_title_check.lower() or "captcha" in page_title_check.lower():
+                    print(f"[LocationSearcher] Bot detection detected during search: {page_title_check}")
+                    print(f"[LocationSearcher] Falling back to Playwright with Browserless.io...")
+                    driver.quit()
+                    driver = None
+                    return cls._search_trulia_with_playwright(location_clean)
+                
                 # Last attempt: get page source snippet for debugging
                 try:
                     page_source_snippet = driver.page_source[:2000]  # First 2000 chars
@@ -351,18 +453,41 @@ class LocationSearcher:
             return None
             
         except TimeoutException as e:
-            logger.error(f"[LocationSearcher] Timeout: {e}")
-            print(f"[LocationSearcher] TIMEOUT ERROR: {e}")
-            import traceback
-            print(f"[LocationSearcher] TIMEOUT Traceback: {traceback.format_exc()}")
-            return None
+            logger.error(f"[LocationSearcher] Timeout with Selenium: {e}")
+            print(f"[LocationSearcher] TIMEOUT ERROR with Selenium: {e}")
+            
+            # Try Playwright fallback
+            if driver:
+                driver.quit()
+                driver = None
+            
+            print(f"[LocationSearcher] Attempting Playwright fallback...")
+            return cls._search_trulia_with_playwright(location_clean)
+            
         except Exception as e:
-            logger.error(f"[LocationSearcher] Error searching Trulia: {e}")
-            import traceback
-            logger.error(f"[LocationSearcher] Traceback: {traceback.format_exc()}")
-            print(f"[LocationSearcher] ERROR: {e}")
-            print(f"[LocationSearcher] Error Traceback: {traceback.format_exc()}")
-            return None
+            error_msg = str(e).lower()
+            # Check if this might be a bot detection error
+            if "denied" in error_msg or "captcha" in error_msg or "blocked" in error_msg or "webdriver" in error_msg:
+                logger.warning(f"[LocationSearcher] Possible bot detection with Selenium: {e}")
+                print(f"[LocationSearcher] Possible bot detection - attempting Playwright fallback...")
+                
+                if driver:
+                    driver.quit()
+                    driver = None
+                
+                return cls._search_trulia_with_playwright(location_clean)
+            
+            # Other errors - try fallback anyway
+            logger.error(f"[LocationSearcher] Error with Selenium: {e}")
+            print(f"[LocationSearcher] ERROR with Selenium: {e}")
+            
+            if driver:
+                driver.quit()
+                driver = None
+            
+            print(f"[LocationSearcher] Attempting Playwright fallback as last resort...")
+            return cls._search_trulia_with_playwright(location_clean)
+            
         finally:
             if driver:
                 driver.quit()

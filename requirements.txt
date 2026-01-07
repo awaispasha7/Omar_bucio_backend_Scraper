@@ -25,9 +25,11 @@ flask-cors==4.0.0
 gunicorn==21.2.0
 
 # ==================== Browser Automation ====================
-# Only needed for forsalebyowner_selenium_scraper.py
+# Selenium for local browser automation
 selenium==4.15.2
 webdriver-manager==4.0.1
+# Playwright for Browserless.io fallback (when bot detection occurs)
+playwright==1.40.0
 
 # ==================== Utilities ====================
 python-dotenv==1.0.0

@@ -30,6 +30,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install Playwright browsers (needed for Browserless.io fallback)
+RUN playwright install chromium
+RUN playwright install-deps chromium
+
 # Copy the rest of the application
 COPY . .
 
