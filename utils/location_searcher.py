@@ -72,14 +72,7 @@ class LocationSearcher:
     def search_trulia(cls, location: str) -> Optional[str]:
         """
         Search Trulia for a location using their search box.
-        After search, URL format examples:
-        - https://www.trulia.com/MN/Minneapolis/
-        - https://www.trulia.com/DC/Washington/
-        - https://www.trulia.com/NY/New_York/
-        
-        Note: Trulia search box may show random text based on last searches,
-        and placeholder is only visible when clicked. We use multiple strategies
-        to find the search box reliably.
+        Simple approach: Find input, type location, press Enter.
         """
         driver = None
         try:
@@ -88,245 +81,90 @@ class LocationSearcher:
             
             driver = cls._get_driver()
             driver.get("https://www.trulia.com")
-            time.sleep(4)  # Wait for page to fully load
+            time.sleep(5)  # Wait for page to fully load
             
-            wait = WebDriverWait(driver, 15)
+            wait = WebDriverWait(driver, 20)
             
-            # Trulia search box strategies (in order of reliability):
-            # Based on actual HTML structure:
-            # - data-testid="location-search-input" (most reliable)
-            # - id="banner-search" (very reliable)
-            # - aria-label="Search for City, Neighborhood, Zip, County, School"
-            # - class contains "react-autosuggest__input"
-            
+            # Simple approach: Use the exact selectors from Trulia HTML
+            # Primary: data-testid="location-search-input"
+            # Fallback: id="banner-search"
             search_box = None
             
-            # Strategy 1: Look for input by specific identifiers (most reliable - from actual HTML)
-            search_selectors = [
-                # Most reliable: data-testid (from actual Trulia HTML)
-                "input[data-testid='location-search-input']",
-                'input[data-testid="location-search-input"]',
-                # Very reliable: id (from actual Trulia HTML)
-                "input#banner-search",
-                # Reliable: aria-label (from actual Trulia HTML)
-                "input[aria-label*='Search for City, Neighborhood, Zip, County, School']",
-                "input[aria-label*='Search for City']",
-                # Class-based (from actual Trulia HTML)
-                "input.react-autosuggest__input",
-                "input[class*='react-autosuggest__input']",
-                # Fallback selectors
-                "input[type='text'][aria-label*='search']",
-                "input[type='text'][aria-label*='Search']",
-                "input[type='text'][id*='search']",
-                "input[type='text'][name*='search']",
-                "input[type='text'][class*='Search']",
-                "input[type='text'][class*='search']",
-            ]
-            
-            for selector in search_selectors:
-                try:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                    for elem in elements:
-                        if elem.is_displayed() and elem.is_enabled():
-                            # Verify it's likely a location search (not price/beds/baths)
-                            aria_label = (elem.get_attribute('aria-label') or '').lower()
-                            placeholder = (elem.get_attribute('placeholder') or '').lower()
-                            name_attr = (elem.get_attribute('name') or '').lower()
-                            
-                            # Skip if it's clearly not a location search
-                            if any(skip_term in aria_label or skip_term in placeholder or skip_term in name_attr 
-                                   for skip_term in ['price', 'bed', 'bath', 'min', 'max', 'filter']):
-                                continue
-                            
-                            search_box = elem
-                            logger.info(f"[LocationSearcher] Found Trulia search box using selector: {selector}")
-                            break
-                    if search_box:
-                        break
-                except Exception as e:
-                    logger.debug(f"[LocationSearcher] Selector {selector} failed: {e}")
-                    continue
-            
-            # Strategy 2: Click on visible inputs to reveal placeholder
-            if not search_box:
-                logger.info(f"[LocationSearcher] Trying to find search box by clicking visible inputs...")
-                try:
-                    all_text_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
-                    for inp in all_text_inputs:
-                        if inp.is_displayed() and inp.is_enabled():
-                            try:
-                                # Click to activate and check placeholder
-                                inp.click()
-                                time.sleep(0.5)
-                                placeholder = (inp.get_attribute('placeholder') or '').lower()
-                                
-                                # Check if placeholder contains location-related keywords
-                                if any(keyword in placeholder for keyword in ['search for city', 'city, neighborhood', 'neighborhood', 'zip', 'county', 'location']):
-                                    search_box = inp
-                                    logger.info(f"[LocationSearcher] Found Trulia search box by clicking and checking placeholder: {placeholder[:60]}...")
-                                    break
-                            except:
-                                continue
-                except Exception as e:
-                    logger.debug(f"[LocationSearcher] Error in click-to-reveal strategy: {e}")
-            
-            # Strategy 3: Find the largest/primary text input (usually the hero search)
-            if not search_box:
-                logger.info(f"[LocationSearcher] Trying to find largest visible text input...")
-                try:
-                    all_text_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
-                    visible_inputs = [inp for inp in all_text_inputs if inp.is_displayed() and inp.is_enabled()]
-                    
-                    if visible_inputs:
-                        # Sort by size (width * height) - hero search is usually largest
-                        visible_inputs.sort(key=lambda x: (x.size['width'] * x.size['height']), reverse=True)
-                        # Take the largest one that's not clearly a filter
-                        for inp in visible_inputs[:3]:  # Check top 3 largest
-                            aria_label = (inp.get_attribute('aria-label') or '').lower()
-                            name_attr = (inp.get_attribute('name') or '').lower()
-                            
-                            # Skip filter inputs
-                            if not any(skip_term in aria_label or skip_term in name_attr 
-                                      for skip_term in ['price', 'bed', 'bath', 'min', 'max', 'filter']):
-                                search_box = inp
-                                logger.info(f"[LocationSearcher] Found Trulia search box by size (largest visible input)")
-                                break
-                except Exception as e:
-                    logger.debug(f"[LocationSearcher] Error in size-based strategy: {e}")
-            
-            if not search_box:
-                raise TimeoutException("Search box not found on Trulia after trying all strategies")
-            
-            # Click on the search box to ensure it's focused and placeholder is visible
             try:
-                search_box.click()
-                time.sleep(0.5)
-            except:
-                pass  # Continue even if click fails
+                # Try the most reliable selector first
+                search_box = wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[data-testid='location-search-input']"))
+                )
+                logger.info(f"[LocationSearcher] Found Trulia search box by data-testid")
+            except TimeoutException:
+                try:
+                    # Fallback to id
+                    search_box = wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "input#banner-search"))
+                    )
+                    logger.info(f"[LocationSearcher] Found Trulia search box by id")
+                except TimeoutException:
+                    raise TimeoutException("Trulia search box not found - tried data-testid and id")
             
-            # Clear any existing text (click clear button if exists, or manually clear)
-            try:
-                # Try clicking the clear button first (data-testid="location-search-clear")
-                clear_button = driver.find_elements(By.CSS_SELECTOR, "[data-testid='location-search-clear']")
-                if clear_button and clear_button[0].is_displayed():
-                    clear_button[0].click()
-                    time.sleep(0.3)
-                else:
-                    search_box.clear()
-            except:
-                search_box.clear()
+            # Ensure it's visible and enabled
+            if not search_box.is_displayed() or not search_box.is_enabled():
+                raise Exception("Trulia search box found but not visible/enabled")
             
+            # Click to focus
+            search_box.click()
             time.sleep(0.5)
+            
+            # Clear any existing value
+            search_box.clear()
+            time.sleep(0.3)
+            
+            # Type the location
             search_box.send_keys(location_clean)
             logger.info(f"[LocationSearcher] Entered '{location_clean}' into Trulia search box")
-            time.sleep(2.5)  # Wait for autocomplete suggestions to appear
+            time.sleep(2)  # Wait for autocomplete
             
-            # Wait for and click the first autocomplete suggestion
-            # Based on actual HTML: id="react-autowhatever-home-banner" role="listbox"
+            # Try to click first suggestion if available
             try:
-                # Wait for suggestions container to appear (from actual HTML)
-                suggestion_selectors = [
-                    # Most specific: from actual HTML structure
-                    "#react-autowhatever-home-banner[role='listbox'] li",
-                    "#react-autowhatever-home-banner[role='listbox'] div",
-                    # General listbox selectors
-                    "[role='listbox'] li",
-                    "[role='listbox'] div[role='option']",
-                    "[id*='react-autowhatever'] li",
-                    "[id*='react-autowhatever'] div",
-                    # Class-based (from actual HTML)
-                    ".react-autosuggest__suggestions-container li",
-                    ".react-autosuggest__suggestions-container div",
-                    # Fallback selectors
-                    "ul[role='listbox'] li",
-                    "div[role='listbox'] div",
-                    "div[class*='autocomplete'] li",
-                    "div[class*='suggestion']",
-                ]
+                # Wait for suggestions container to appear
+                suggestions_container = WebDriverWait(driver, 3).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "#react-autowhatever-home-banner[role='listbox'], .react-autosuggest__suggestions-container"))
+                )
+                time.sleep(0.5)  # Wait for suggestions to populate
                 
-                suggestions = []
-                for selector in suggestion_selectors:
-                    try:
-                        # Wait for suggestions container to be visible
-                        suggestions_container = WebDriverWait(driver, 2).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "[role='listbox'], .react-autosuggest__suggestions-container"))
-                        )
-                        # Wait a bit more for suggestions to populate
-                        time.sleep(0.5)
-                        
-                        suggestions = driver.find_elements(By.CSS_SELECTOR, selector)
-                        if suggestions and len(suggestions) > 0:
-                            logger.info(f"[LocationSearcher] Found {len(suggestions)} autocomplete suggestions using selector: {selector}")
-                            break
-                    except TimeoutException:
-                        continue
-                    except Exception:
-                        continue
-                
-                if suggestions and len(suggestions) > 0:
-                    # Filter to only visible suggestions
-                    visible_suggestions = [s for s in suggestions if s.is_displayed()]
-                    if visible_suggestions:
-                        suggestion_text = visible_suggestions[0].text.strip()
-                        logger.info(f"[LocationSearcher] Clicking first visible suggestion: {suggestion_text[:50]}...")
-                        visible_suggestions[0].click()
-                        time.sleep(3)  # Wait for redirect after clicking
-                    else:
-                        # No visible suggestions, try submit button or Enter
-                        logger.info(f"[LocationSearcher] No visible suggestions, trying submit button")
-                        try:
-                            submit_button = driver.find_element(By.CSS_SELECTOR, "[data-testid='location-search-button'], [aria-label='submit search']")
-                            submit_button.click()
-                            time.sleep(3)
-                        except:
-                            search_box.send_keys(Keys.RETURN)
-                            time.sleep(3)
-                else:
-                    # No suggestions found, try submit button or Enter key
-                    logger.info(f"[LocationSearcher] No suggestions found, trying submit button")
-                    try:
-                        submit_button = driver.find_element(By.CSS_SELECTOR, "[data-testid='location-search-button'], [aria-label='submit search']")
-                        submit_button.click()
+                # Find first suggestion
+                suggestions = driver.find_elements(By.CSS_SELECTOR, "#react-autowhatever-home-banner li, .react-autosuggest__suggestions-container li")
+                if suggestions:
+                    visible = [s for s in suggestions if s.is_displayed()]
+                    if visible:
+                        logger.info(f"[LocationSearcher] Clicking first suggestion: {visible[0].text[:50]}")
+                        visible[0].click()
                         time.sleep(3)
-                    except:
-                        logger.info(f"[LocationSearcher] Submit button not found, pressing Enter key")
+                    else:
+                        # Press Enter if no visible suggestions
                         search_box.send_keys(Keys.RETURN)
                         time.sleep(3)
+                else:
+                    # Press Enter if no suggestions
+                    search_box.send_keys(Keys.RETURN)
+                    time.sleep(3)
             except TimeoutException:
-                # Suggestions didn't appear, try submit button or Enter key
-                logger.info(f"[LocationSearcher] Suggestions timeout, trying submit button")
-                try:
-                    submit_button = driver.find_element(By.CSS_SELECTOR, "[data-testid='location-search-button'], [aria-label='submit search']")
-                    submit_button.click()
-                    time.sleep(3)
-                except:
-                    logger.info(f"[LocationSearcher] Submit button not found, pressing Enter key")
-                    search_box.send_keys(Keys.RETURN)
-                    time.sleep(3)
-            except Exception as e:
-                logger.warning(f"[LocationSearcher] Error with suggestions: {e}, trying submit button")
-                try:
-                    submit_button = driver.find_element(By.CSS_SELECTOR, "[data-testid='location-search-button'], [aria-label='submit search']")
-                    submit_button.click()
-                    time.sleep(3)
-                except:
-                    logger.warning(f"[LocationSearcher] Submit button failed, using Enter key")
-                    search_box.send_keys(Keys.RETURN)
-                    time.sleep(3)
+                # No suggestions appeared, just press Enter
+                logger.info(f"[LocationSearcher] No suggestions appeared, pressing Enter")
+                search_box.send_keys(Keys.RETURN)
+                time.sleep(3)
             
-            # Get the final URL after redirect
-            time.sleep(2)  # Extra wait for redirect
+            # Get final URL
+            time.sleep(2)
             current_url = driver.current_url
             logger.info(f"[LocationSearcher] Trulia final URL: {current_url}")
             
-            # Simply return whatever URL we ended up on
-            if 'trulia.com' in current_url:
+            if 'trulia.com' in current_url and current_url != 'https://www.trulia.com':
                 return current_url
             
             return None
             
-        except TimeoutException:
-            logger.error(f"[LocationSearcher] Timeout waiting for Trulia search box")
+        except TimeoutException as e:
+            logger.error(f"[LocationSearcher] Timeout: {e}")
             return None
         except Exception as e:
             logger.error(f"[LocationSearcher] Error searching Trulia: {e}")
