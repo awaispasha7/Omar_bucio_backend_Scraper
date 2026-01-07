@@ -190,7 +190,7 @@ class LocationSearcher:
             # Wait for search box - Apartments.com uses placeholder like "New York, NY"
             wait = WebDriverWait(driver, 15)
             
-            # First try to find by placeholder text pattern (city, state format like "New York, NY")
+            # First try to find by placeholder text - Apartments.com uses "Location, School, or Point of Interest"
             search_box = None
             try:
                 all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
@@ -198,11 +198,15 @@ class LocationSearcher:
                     if inp.is_displayed() and inp.is_enabled():
                         placeholder = (inp.get_attribute('placeholder') or '').lower()
                         aria_label = (inp.get_attribute('aria-label') or '').lower()
-                        # Apartments.com placeholder is typically a city, state format like "new york, ny"
-                        # or contains "location" in aria-label
-                        if (',' in placeholder and any(keyword in placeholder for keyword in ['ny', 'nyc', 'city'])) or 'location' in aria_label or 'location' in placeholder:
+                        # Apartments.com placeholder is: "Location, School, or Point of Interest"
+                        if any(keyword in placeholder for keyword in ['location, school', 'location, school, or point', 'location school', 'point of interest']):
                             search_box = inp
                             logger.info(f"[LocationSearcher] Found Apartments.com search box by placeholder: {placeholder}")
+                            break
+                        # Also check for location in aria-label
+                        if 'location' in aria_label and 'school' in aria_label:
+                            search_box = inp
+                            logger.info(f"[LocationSearcher] Found Apartments.com search box by aria-label: {aria_label}")
                             break
             except:
                 pass
@@ -234,45 +238,64 @@ class LocationSearcher:
             if not search_box:
                 raise TimeoutException("Search box not found on Apartments.com")
             
-            # Clear and enter location
+            # Clear the search box
             search_box.clear()
-            search_box.send_keys(location_clean)
-            time.sleep(2)  # Wait for autocomplete suggestions
+            time.sleep(0.5)
             
-            # Try to click on first suggestion if available
+            # Enter location text
+            search_box.send_keys(location_clean)
+            logger.info(f"[LocationSearcher] Entered '{location_clean}' into Apartments.com search box")
+            time.sleep(2)  # Wait for autocomplete suggestions to appear
+            
+            # Try to click on first autocomplete suggestion if available
             try:
-                suggestions = driver.find_elements(By.CSS_SELECTOR, "ul[class*='autocomplete'] li, ul[class*='suggestion'] li, div[class*='suggestion'], li[class*='suggestion']")
-                if suggestions:
+                # Wait for suggestions to appear
+                suggestions = WebDriverWait(driver, 3).until(
+                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul[class*='autocomplete'] li, ul[class*='suggestion'] li, div[class*='suggestion'], li[class*='suggestion'], div[role='option'], ul[role='listbox'] li"))
+                )
+                if suggestions and len(suggestions) > 0:
+                    logger.info(f"[LocationSearcher] Found {len(suggestions)} autocomplete suggestions, clicking first one")
                     suggestions[0].click()
-                    time.sleep(3)
+                    time.sleep(3)  # Wait for redirect after clicking suggestion
                 else:
-                    # Click search button or press Enter
+                    # No suggestions, try clicking search button or pressing Enter
                     try:
-                        search_button = driver.find_element(By.CSS_SELECTOR, "button[aria-label*='Search apartments'], button[type='submit'], button[class*='search']")
+                        search_button = driver.find_element(By.CSS_SELECTOR, "button[aria-label*='Search apartments'], button[aria-label*='search'], button[type='submit'], button[class*='search']")
+                        logger.info(f"[LocationSearcher] Clicking search button")
                         search_button.click()
+                        time.sleep(3)
                     except:
+                        # Fallback to Enter key
+                        logger.info(f"[LocationSearcher] Pressing Enter key")
                         search_box.send_keys(Keys.RETURN)
+                        time.sleep(3)
+            except TimeoutException:
+                # No suggestions appeared, try pressing Enter or clicking search button
+                logger.info(f"[LocationSearcher] No autocomplete suggestions, trying Enter key or search button")
+                try:
+                    search_button = driver.find_element(By.CSS_SELECTOR, "button[aria-label*='Search apartments'], button[aria-label*='search'], button[type='submit'], button[class*='search']")
+                    search_button.click()
                     time.sleep(3)
-            except:
+                except:
+                    search_box.send_keys(Keys.RETURN)
+                    time.sleep(3)
+            except Exception as e:
                 # Fallback to Enter key
+                logger.warning(f"[LocationSearcher] Error with suggestions/button: {e}, using Enter key")
                 search_box.send_keys(Keys.RETURN)
                 time.sleep(3)
             
-            # Get the current URL after search
-            current_url = driver.current_url
-            logger.info(f"[LocationSearcher] Apartments.com final URL: {current_url}")
+            # Wait a bit more for any redirects or page updates
+            time.sleep(3)
             
+            # Get the current URL after search - use whatever URL the website redirected us to
+            # Examples: apartments.com/missouri-city-tx/ or apartments.com/hub/new-york-ny/
+            current_url = driver.current_url
+            logger.info(f"[LocationSearcher] Apartments.com final URL after search: {current_url}")
+            
+            # Simply return whatever URL we ended up on
+            # The website's natural redirect will give us the correct URL format
             if 'apartments.com' in current_url:
-                # Apartments.com URLs are always in format: /hub/{location}/ or /{location}/
-                # Extract location from URL and build for-rent-by-owner URL
-                match = re.search(r'apartments\.com/(?:hub/)?([a-z0-9-]+(?:-[a-z]{2})?)/', current_url.lower())
-                if match:
-                    city_state = match.group(1)
-                    # Always use /hub/ format and append for-rent-by-owner
-                    listing_url = f"https://www.apartments.com/hub/{city_state}/for-rent-by-owner/"
-                    logger.info(f"[LocationSearcher] Built Apartments.com listing URL: {listing_url}")
-                    return listing_url
-                
                 return current_url
             
             return None
