@@ -345,104 +345,26 @@ class LocationSearcher:
                     browser.close()
                     return None
                 
-                # Fill search box directly (no slow typing needed - page is already loaded successfully)
+                # Fill search box and press Enter - Trulia automatically handles the location mapping
+                # Trulia's search is smart enough to map "minneapolis" to "Minneapolis, MN" automatically
                 print(f"[LocationSearcher] Entering location '{location_clean}' into search box...")
+                logger.info(f"[STATUS] Searching for: {location_clean}")
                 search_box.click()
                 search_box.fill("")  # Clear
-                search_box.fill(location_clean)  # Paste directly
-                time.sleep(2)  # Wait for autocomplete suggestions to appear
+                search_box.fill(location_clean)  # Type the location
+                time.sleep(1)  # Brief wait for any autocomplete (optional)
                 
-                # Wait for suggestions and click the appropriate one
+                # Press Enter - Trulia will automatically map to the correct location
+                print(f"[LocationSearcher] Pressing Enter to submit search...")
+                logger.info("[STATUS] Submitting search (Trulia will automatically map to correct location)...")
+                search_box.press("Enter")
+                
+                # Wait for navigation to complete
                 try:
-                    # Wait for suggestions container to appear
-                    logger.info("[STATUS] Waiting for location suggestions...")
-                    print(f"[LocationSearcher] [STATUS] Waiting for location suggestions...")
-                    time.sleep(1)  # Give suggestions time to render
-                    
-                    # Try to find suggestions - be more specific about location suggestions
-                    suggestions = page.query_selector_all("#react-autowhatever-home-banner li, .react-autosuggest__suggestions-container li, ul[role='listbox'] li")
-                    if suggestions:
-                        visible_suggestions = []
-                        location_clean_lower = location_clean.lower()
-                        
-                        for s in suggestions:
-                            try:
-                                if s.is_visible():
-                                    suggestion_text = s.inner_text().strip()
-                                    suggestion_lower = suggestion_text.lower()
-                                    
-                                    # Skip non-location suggestions
-                                    skip_keywords = [
-                                        "current location",
-                                        "search by commute time",
-                                        "search commute",
-                                        "commute",
-                                        "popular searches",
-                                        "recent searches"
-                                    ]
-                                    
-                                    if any(keyword in suggestion_lower for keyword in skip_keywords):
-                                        continue
-                                    
-                                    # Look for suggestions that contain the location name
-                                    # Or contain common location indicators (city names, states, zip codes)
-                                    is_location_suggestion = (
-                                        location_clean_lower in suggestion_lower or
-                                        any(word in suggestion_lower for word in location_clean_lower.split() if len(word) > 2) or
-                                        # Check for common location patterns: "City, State" or "City State"
-                                        ("," in suggestion_text and any(c.isupper() for c in suggestion_text))
-                                    )
-                                    
-                                    if suggestion_text and is_location_suggestion:
-                                        visible_suggestions.append((s, suggestion_text))
-                            except:
-                                continue
-                        
-                        if visible_suggestions:
-                            # Use the first suggestion that matches our location
-                            suggestion_element, suggestion_text = visible_suggestions[0]
-                            print(f"[LocationSearcher] Clicking location suggestion: {suggestion_text[:80]}")
-                            logger.info(f"[STATUS] Selecting location: {suggestion_text[:80]}")
-                            
-                            # Use JavaScript click to avoid connection issues
-                            try:
-                                suggestion_element.evaluate("element => element.click()")
-                            except Exception as js_error:
-                                # Fallback to regular click
-                                print(f"[LocationSearcher] JavaScript click failed, trying regular click: {js_error}")
-                                try:
-                                    suggestion_element.click()
-                                except Exception as click_error:
-                                    print(f"[LocationSearcher] Regular click also failed: {click_error}")
-                                    # Fall back to Enter key
-                                    search_box.press("Enter")
-                                    time.sleep(3)
-                                    return None
-                            
-                            # Wait for navigation
-                            try:
-                                page.wait_for_load_state("networkidle", timeout=10000)
-                            except:
-                                time.sleep(3)  # Fallback wait
-                        else:
-                            # No matching location suggestions found, just press Enter
-                            print(f"[LocationSearcher] No matching location suggestions found (only found UI elements), pressing Enter")
-                            logger.info("[STATUS] No location suggestions found, using Enter key...")
-                            search_box.press("Enter")
-                            time.sleep(3)
-                    else:
-                        # No suggestions container, press Enter
-                        print(f"[LocationSearcher] No suggestions found, pressing Enter")
-                        search_box.press("Enter")
-                        time.sleep(3)
-                except Exception as suggestion_error:
-                    # If anything fails, try pressing Enter as fallback
-                    print(f"[LocationSearcher] Error handling suggestions ({suggestion_error}), pressing Enter as fallback")
-                    try:
-                        search_box.press("Enter")
-                        time.sleep(3)
-                    except:
-                        pass
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                except:
+                    # If networkidle times out, wait a bit anyway
+                    time.sleep(3)
                 
                 # Get final URL (wait for any navigation to complete)
                 logger.info("[STATUS] Retrieving final URL...")
