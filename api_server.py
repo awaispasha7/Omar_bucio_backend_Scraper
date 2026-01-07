@@ -469,10 +469,24 @@ def get_trulia_status():
         "error": trulia_status["error"]
     })
 
+@app.route('/api/health', methods=['GET', 'OPTIONS'])
+def health_check():
+    """Simple health check endpoint to verify server is running"""
+    if request.method == 'OPTIONS':
+        response = jsonify({})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        return response
+    
+    response = jsonify({"status": "ok", "message": "Server is running"})
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
+
 @app.route('/api/search-location', methods=['POST', 'GET', 'OPTIONS'])
 def search_location():
     """Search a platform for a location and return the actual listing URL."""
-    # Handle CORS preflight
+    # Handle CORS preflight - MUST be first thing we do
     if request.method == 'OPTIONS':
         response = jsonify({})
         response.headers.add('Access-Control-Allow-Origin', '*')
@@ -480,92 +494,133 @@ def search_location():
         response.headers.add('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
         return response
     
-    from utils.location_searcher import LocationSearcher
+    # Wrap EVERYTHING in try-except to prevent any crash
     import traceback
     
-    # Get platform and location from request
     try:
-        if request.is_json and request.json:
-            platform = request.json.get('platform')
-            location = request.json.get('location')
-        else:
-            platform = request.args.get('platform') or (request.form.get('platform') if request.form else None)
-            location = request.args.get('location') or (request.form.get('location') if request.form else None)
-    except Exception as e:
-        add_log(f"Error parsing request: {e}", "error")
-        response = jsonify({"error": "Invalid request format"})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 400
-    
-    if not platform:
-        response = jsonify({"error": "Platform parameter is required"})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 400
-    
-    if not location:
-        response = jsonify({"error": "Location parameter is required"})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 400
-    
-    try:
-        add_log(f"Starting location search: platform={platform}, location={location}", "info")
-        
-        # Run the location search with additional error handling
-        # Note: Selenium timeouts are handled in location_searcher.py (20 second waits)
-        # Total search time should be under 30-40 seconds
         try:
-            url = LocationSearcher.search_platform(platform, location)
-        except Exception as selenium_error:
-            # Catch Selenium-specific errors that might crash the server
-            error_msg = str(selenium_error)
-            add_log(f"Selenium error during location search: {error_msg}", "error")
-            add_log(f"Selenium traceback: {traceback.format_exc()}", "error")
-            
-            # Return a user-friendly error
+            from utils.location_searcher import LocationSearcher
+        except Exception as import_error:
+            error_msg = f"Failed to import LocationSearcher: {str(import_error)}"
+            add_log(error_msg, "error")
             response = jsonify({
-                "error": f"Browser automation failed: {error_msg}. Please ensure Chrome/Chromium is available on the server.",
-                "platform": platform,
-                "location": location,
-                "error_type": "selenium_error"
+                "error": error_msg,
+                "error_type": "import_error"
             })
             response.headers.add('Access-Control-Allow-Origin', '*')
             return response, 500
         
-        if not url:
-            add_log(f"Could not find URL for {platform}/{location}", "warning")
+        # Get platform and location from request
+        try:
+            if request.is_json and request.json:
+                platform = request.json.get('platform')
+                location = request.json.get('location')
+            else:
+                platform = request.args.get('platform') or (request.form.get('platform') if request.form else None)
+                location = request.args.get('location') or (request.form.get('location') if request.form else None)
+        except Exception as e:
+            add_log(f"Error parsing request: {e}", "error")
+            response = jsonify({"error": "Invalid request format"})
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 400
+        
+        if not platform:
+            response = jsonify({"error": "Platform parameter is required"})
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 400
+        
+        if not location:
+            response = jsonify({"error": "Location parameter is required"})
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 400
+        
+        try:
+            add_log(f"Starting location search: platform={platform}, location={location}", "info")
+            
+            # Run the location search with additional error handling
+            # Note: Selenium timeouts are handled in location_searcher.py (20 second waits)
+            # Total search time should be under 30-40 seconds
+            try:
+                url = LocationSearcher.search_platform(platform, location)
+            except Exception as selenium_error:
+                # Catch Selenium-specific errors that might crash the server
+                error_msg = str(selenium_error)
+                add_log(f"Selenium error during location search: {error_msg}", "error")
+                add_log(f"Selenium traceback: {traceback.format_exc()}", "error")
+                
+                # Return a user-friendly error
+                response = jsonify({
+                    "error": f"Browser automation failed: {error_msg}. Please ensure Chrome/Chromium is available on the server.",
+                    "platform": platform,
+                    "location": location,
+                    "error_type": "selenium_error"
+                })
+                response.headers.add('Access-Control-Allow-Origin', '*')
+                return response, 500
+            
+            if not url:
+                add_log(f"Could not find URL for {platform}/{location}", "warning")
+                response = jsonify({
+                    "error": f"Could not find listing URL for '{location}' on {platform}",
+                    "platform": platform,
+                    "location": location
+                })
+                response.headers.add('Access-Control-Allow-Origin', '*')
+                return response, 404
+            
+            # Validate the URL using URLDetector
+            from utils.url_detector import URLDetector
+            detected_platform, extracted_location = URLDetector.detect_and_extract(url)
+            
+            add_log(f"Location search successful: {platform}/{location} -> {url}", "success")
             response = jsonify({
-                "error": f"Could not find listing URL for '{location}' on {platform}",
-                "platform": platform,
-                "location": location
+                "url": url,
+                "platform": detected_platform or platform,
+                "location": extracted_location,
+                "success": True
             })
             response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 404
+            return response
+        except Exception as inner_error:
+            # Catch errors in the inner try block
+            error_trace = traceback.format_exc()
+            add_log(f"Error in location search: {inner_error}", "error")
+            add_log(f"Traceback: {error_trace}", "error")
+            response = jsonify({
+                "error": f"Error searching location: {str(inner_error)}",
+                "platform": platform if 'platform' in locals() else None,
+                "location": location if 'location' in locals() else None
+            })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 500
         
-        # Validate the URL using URLDetector
-        from utils.url_detector import URLDetector
-        detected_platform, extracted_location = URLDetector.detect_and_extract(url)
-        
-        add_log(f"Location search successful: {platform}/{location} -> {url}", "success")
-        response = jsonify({
-            "url": url,
-            "platform": detected_platform or platform,
-            "location": extracted_location,
-            "success": True
-        })
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response
-        
-    except Exception as e:
-        error_trace = traceback.format_exc()
-        add_log(f"Error searching location: {e}", "error")
-        add_log(f"Traceback: {error_trace}", "error")
-        response = jsonify({
-            "error": f"Error searching location: {str(e)}",
-            "platform": platform,
-            "location": location
-        })
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 500
+    except Exception as outer_error:
+        # Catch ANY exception that wasn't caught above
+        try:
+            error_trace = traceback.format_exc()
+            add_log(f"Unhandled error in search_location: {outer_error}", "error")
+            add_log(f"Traceback: {error_trace}", "error")
+            
+            platform_val = platform if 'platform' in locals() else None
+            location_val = location if 'location' in locals() else None
+            
+            response = jsonify({
+                "error": f"Unexpected error: {str(outer_error)}",
+                "platform": platform_val,
+                "location": location_val,
+                "error_type": "unhandled_exception"
+            })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 500
+        except Exception as final_error:
+            # Last resort - return minimal response with CORS
+            try:
+                response = jsonify({"error": "Internal server error - could not process request"})
+                response.headers.add('Access-Control-Allow-Origin', '*')
+                return response, 500
+            except:
+                # Absolute last resort - this should never happen
+                return '{"error":"Internal server error"}', 500, {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}
 
 @app.route('/api/validate-url', methods=['POST', 'GET'])
 def validate_url():
