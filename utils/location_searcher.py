@@ -120,6 +120,40 @@ class LocationSearcher:
             raise Exception(f"Could not initialize browser: {str(e)}. Please ensure Chrome/Chromium is installed.")
     
     @classmethod
+    def _try_construct_trulia_url(cls, location: str) -> Optional[str]:
+        """
+        Try to construct a Trulia URL directly from location string.
+        Trulia URL patterns: /{STATE}/{City}/  (e.g., /MN/Minneapolis/)
+        """
+        try:
+            location = location.strip()
+            
+            # Try to parse "City, State" format
+            if ',' in location:
+                parts = [p.strip() for p in location.split(',')]
+                if len(parts) == 2:
+                    city = parts[0].replace(' ', '_').replace('-', '_')
+                    state = parts[1].upper()
+                    return f"https://www.trulia.com/{state}/{city}/"
+            
+            # Try to parse "City State" format
+            parts = location.split()
+            if len(parts) >= 2:
+                # Assume last part is state
+                state = parts[-1].upper()
+                city = '_'.join(parts[:-1]).replace('-', '_')
+                return f"https://www.trulia.com/{state}/{city}/"
+            
+            # For single word (like "Minneapolis"), try common states or assume MN
+            # This is a guess - might not always work
+            city = location.replace(' ', '_').replace('-', '_')
+            # Try MN first (Minneapolis is most likely MN)
+            return f"https://www.trulia.com/MN/{city}/"
+            
+        except:
+            return None
+    
+    @classmethod
     def _search_trulia_with_playwright(cls, location: str) -> Optional[str]:
         """
         Search Trulia using Playwright with Browserless.io (fallback when bot detected)
@@ -345,26 +379,108 @@ class LocationSearcher:
                     browser.close()
                     return None
                 
-                # Fill search box and press Enter - Trulia automatically handles the location mapping
-                # Trulia's search is smart enough to map "minneapolis" to "Minneapolis, MN" automatically
+                # Fill search box and submit search
                 print(f"[LocationSearcher] Entering location '{location_clean}' into search box...")
                 logger.info(f"[STATUS] Searching for: {location_clean}")
                 search_box.click()
+                time.sleep(0.3)
                 search_box.fill("")  # Clear
                 search_box.fill(location_clean)  # Type the location
-                time.sleep(1)  # Brief wait for any autocomplete (optional)
+                time.sleep(1.5)  # Wait for autocomplete suggestions
                 
-                # Press Enter - Trulia will automatically map to the correct location
-                print(f"[LocationSearcher] Pressing Enter to submit search...")
-                logger.info("[STATUS] Submitting search (Trulia will automatically map to correct location)...")
-                search_box.press("Enter")
+                # Get initial URL before submission
+                initial_url = page.url
+                print(f"[LocationSearcher] Initial URL: {initial_url}")
                 
-                # Wait for navigation to complete
+                # Try multiple methods to submit - Trulia has a red search button
+                print(f"[LocationSearcher] Attempting to submit search...")
+                logger.info("[STATUS] Submitting search...")
+                
+                # Method 1: Look for Trulia's search button (red button with magnifying glass icon)
+                search_submitted = False
                 try:
-                    page.wait_for_load_state("networkidle", timeout=15000)
+                    # Trulia's search button might be near the input or in the form
+                    button_selectors = [
+                        "button[type='submit']",
+                        "button.SearchButton",
+                        "button[aria-label*='Search']",
+                        "form button[type='submit']",
+                        "button:has(svg[data-testid*='search'])",
+                    ]
+                    for selector in button_selectors:
+                        try:
+                            btn = page.query_selector(selector)
+                            if btn and btn.is_visible():
+                                print(f"[LocationSearcher] Found search button with '{selector}', clicking...")
+                                btn.click()
+                                search_submitted = True
+                                break
+                        except:
+                            continue
+                except Exception as btn_err:
+                    print(f"[LocationSearcher] Button search error: {btn_err}")
+                
+                # Method 2: Try form submission
+                if not search_submitted:
+                    try:
+                        form = search_box.evaluate_handle("el => el.closest('form')")
+                        if form:
+                            print(f"[LocationSearcher] Submitting form directly...")
+                            page.evaluate("form => form.submit()", form)
+                            search_submitted = True
+                    except:
+                        pass
+                
+                # Method 3: Press Enter
+                if not search_submitted:
+                    try:
+                        print(f"[LocationSearcher] Pressing Enter key...")
+                        search_box.press("Enter")
+                        search_submitted = True
+                    except Exception as enter_err:
+                        print(f"[LocationSearcher] Enter key error: {enter_err}")
+                
+                # Method 4: JavaScript Enter events
+                if not search_submitted:
+                    try:
+                        print(f"[LocationSearcher] Trying JavaScript Enter events...")
+                        search_box.evaluate("""
+                            el => {
+                                el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', keyCode: 13, bubbles: true}));
+                                el.dispatchEvent(new KeyboardEvent('keypress', {key: 'Enter', keyCode: 13, bubbles: true}));
+                                el.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', keyCode: 13, bubbles: true}));
+                            }
+                        """)
+                        search_submitted = True
+                    except:
+                        pass
+                
+                # Wait for navigation - actively monitor URL changes
+                print(f"[LocationSearcher] Waiting for navigation (monitoring URL changes)...")
+                logger.info("[STATUS] Waiting for page to redirect...")
+                
+                max_wait = 12  # Wait up to 12 seconds
+                final_url_check = initial_url
+                for wait_attempt in range(max_wait):
+                    time.sleep(1)
+                    try:
+                        current_url = page.url
+                        if current_url != initial_url and 'trulia.com' in current_url and current_url not in ['https://www.trulia.com/', 'https://www.trulia.com']:
+                            print(f"[LocationSearcher] ✓ Navigation detected! URL: {initial_url} → {current_url}")
+                            final_url_check = current_url
+                            break
+                        elif wait_attempt == max_wait - 1:
+                            print(f"[LocationSearcher] ✗ URL did not change after {max_wait}s. Still at: {current_url}")
+                            print(f"[LocationSearcher] Initial URL was: {initial_url}")
+                            final_url_check = current_url
+                    except Exception as url_err:
+                        print(f"[LocationSearcher] Error checking URL: {url_err}")
+                
+                # Also wait for page load state
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
                 except:
-                    # If networkidle times out, wait a bit anyway
-                    time.sleep(3)
+                    time.sleep(2)  # Fallback wait
                 
                 # Get final URL (wait for any navigation to complete)
                 logger.info("[STATUS] Retrieving final URL...")
@@ -373,10 +489,13 @@ class LocationSearcher:
                 
                 try:
                     final_url = page.url
-                    print(f"[LocationSearcher] Playwright final URL: {final_url}")
+                    print(f"[LocationSearcher] Final URL after navigation: {final_url}")
+                    # If URL didn't change, use the monitored URL
+                    if final_url == initial_url:
+                        final_url = final_url_check
                 except Exception as url_error:
                     print(f"[LocationSearcher] Error getting final URL: {url_error}")
-                    final_url = None
+                    final_url = final_url_check  # Use the URL we monitored
                 finally:
                     # Always close browser
                     try:
@@ -387,6 +506,30 @@ class LocationSearcher:
                 if final_url and 'trulia.com' in final_url and final_url != 'https://www.trulia.com' and final_url != 'https://www.trulia.com/':
                     return final_url
                 
+                # If search submission failed and URL didn't change, try constructing URL directly as fallback
+                print(f"[LocationSearcher] Search submission didn't redirect. Trying URL construction fallback...")
+                constructed_url = cls._try_construct_trulia_url(location_clean)
+                if constructed_url:
+                    print(f"[LocationSearcher] Constructed URL: {constructed_url}")
+                    # Verify the URL works by navigating to it
+                    try:
+                        page.goto(constructed_url, wait_until="domcontentloaded", timeout=30000)
+                        time.sleep(2)
+                        verify_url = page.url
+                        if 'trulia.com' in verify_url and verify_url != 'https://www.trulia.com/' and verify_url != 'https://www.trulia.com':
+                            print(f"[LocationSearcher] ✓ Constructed URL verified: {verify_url}")
+                            try:
+                                browser.close()
+                            except:
+                                pass
+                            return verify_url
+                    except Exception as verify_error:
+                        print(f"[LocationSearcher] URL verification failed: {verify_error}")
+                
+                try:
+                    browser.close()
+                except:
+                    pass
                 return None
                 
         except ImportError:
