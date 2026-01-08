@@ -59,9 +59,10 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Note: We don't install Playwright browsers locally since we're using Browserless.io
-# Set environment variable to skip browser download (saves space and build time)
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+# Install Playwright browsers for location searches (Trulia, etc.)
+# We need Playwright browsers for interactive location searches
+RUN playwright install chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 
 # Copy the rest of the application
 COPY . .

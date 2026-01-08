@@ -673,46 +673,257 @@ class LocationSearcher:
     @classmethod
     def search_trulia(cls, location: str) -> Optional[str]:
         """
-        Search Trulia for a location using Selenium with Zyte proxy.
+        Search Trulia for a location using multiple strategies in order:
+        1. Playwright (best for bot detection bypass)
+        2. Selenium (fallback)
+        3. URL construction (final fallback)
+        
+        Note: Puppeteer is Node.js only, so we skip it and use Playwright (Python equivalent) instead.
+        Requested order: Playwright -> Puppeteer -> Selenium -> URL construct
+        Actual implementation: Playwright -> Selenium -> URL construct (Puppeteer skipped)
         """
+        location_clean = location.strip()
+        logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
+        
+        # Strategy 1: Try Playwright first (best for bot detection bypass)
+        print(f"[LocationSearcher] [1/4] Trying Playwright...")
+        result = cls._search_trulia_with_playwright(location_clean)
+        if result:
+            print(f"[LocationSearcher] ✓ Playwright succeeded!")
+            return result
+        print(f"[LocationSearcher] ✗ Playwright failed")
+        
+        # Strategy 2: Puppeteer (skipped - Node.js only, not available in Python)
+        print(f"[LocationSearcher] [2/4] Skipping Puppeteer (Node.js only, not available in Python)")
+        
+        # Strategy 3: Fallback to Selenium
+        print(f"[LocationSearcher] [3/4] Trying Selenium...")
+        result = cls._search_trulia_with_selenium(location_clean)
+        if result:
+            print(f"[LocationSearcher] ✓ Selenium succeeded!")
+            return result
+        print(f"[LocationSearcher] ✗ Selenium failed")
+        
+        # Strategy 4: Final fallback to URL construction
+        print(f"[LocationSearcher] [4/4] Using URL construction fallback...")
+        result = cls._try_construct_trulia_url(location_clean)
+        if result:
+            print(f"[LocationSearcher] ✓ URL construction succeeded!")
+        else:
+            print(f"[LocationSearcher] ✗ All strategies failed")
+        return result
+    
+    @classmethod
+    def _search_trulia_with_playwright(cls, location: str) -> Optional[str]:
+        """Search Trulia using Playwright (primary method)."""
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            print(f"[LocationSearcher] Trying Playwright for Trulia: {location}")
+            logger.info(f"[LocationSearcher] Using Playwright for Trulia search")
+            
+            with sync_playwright() as p:
+                # Launch browser with stealth settings
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox',
+                    ]
+                )
+                
+                # Create context with realistic settings
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept-Encoding": "gzip, deflate, br",
+                    }
+                )
+                
+                # Add stealth scripts
+                context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                    window.chrome = { runtime: {} };
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5]
+                    });
+                """)
+                
+                page = context.new_page()
+                print(f"[LocationSearcher] Navigating to Trulia...")
+                
+                # Navigate to Trulia
+                try:
+                    page.goto("https://www.trulia.com", wait_until="domcontentloaded", timeout=60000)
+                    time.sleep(3)  # Wait for page to load
+                except Exception as e:
+                    print(f"[LocationSearcher] Failed to load Trulia page: {e}")
+                    browser.close()
+                    return None
+                
+                # Check if page is blocked
+                page_title = page.title().lower()
+                if 'access denied' in page_title or 'captcha' in page_title or 'blocked' in page_title:
+                    print(f"[LocationSearcher] Page appears blocked: {page.title()}")
+                    browser.close()
+                    return None
+                
+                print(f"[LocationSearcher] Looking for Trulia search box with Playwright...")
+                
+                # Try multiple selectors for search box
+                search_selectors = [
+                    "input[data-testid='location-search-input']",
+                    "input#banner-search",
+                    "input[aria-label*='Search for City' i]",
+                    "input[aria-label*='Search' i][aria-label*='City' i]",
+                    "input.react-autosuggest__input",
+                    "input[placeholder*='Search' i]",
+                    "input[placeholder*='City' i]",
+                ]
+                
+                search_box = None
+                for selector in search_selectors:
+                    try:
+                        print(f"[LocationSearcher] Trying selector: {selector}")
+                        search_box = page.query_selector(selector)
+                        if search_box and search_box.is_visible():
+                            print(f"[LocationSearcher] ✓ Found Trulia search box: {selector}")
+                            break
+                    except Exception as e:
+                        print(f"[LocationSearcher] Error with selector {selector}: {e}")
+                        continue
+                
+                # If not found by selectors, try finding by placeholder
+                if not search_box:
+                    try:
+                        all_inputs = page.query_selector_all("input[type='text'], input[placeholder]")
+                        for inp in all_inputs:
+                            try:
+                                if inp.is_visible():
+                                    placeholder = (inp.get_attribute('placeholder') or '').lower()
+                                    aria_label = (inp.get_attribute('aria-label') or '').lower()
+                                    if any(keyword in placeholder or keyword in aria_label for keyword in ['search', 'city', 'location', 'address']):
+                                        search_box = inp
+                                        print(f"[LocationSearcher] ✓ Found Trulia search box by placeholder/aria-label")
+                                        break
+                            except:
+                                continue
+                    except Exception as e:
+                        print(f"[LocationSearcher] Placeholder search failed: {e}")
+                
+                if not search_box:
+                    print(f"[LocationSearcher] Search box not found with Playwright")
+                    browser.close()
+                    return None
+                
+                # Click and clear search box
+                search_box.click()
+                time.sleep(0.5)
+                search_box.fill("")  # Clear
+                time.sleep(0.5)
+                
+                # Type location
+                print(f"[LocationSearcher] Typing location: {location}")
+                search_box.fill(location)
+                time.sleep(2)  # Wait for autocomplete
+                
+                # Try to click first suggestion or press Enter
+                search_submitted = False
+                try:
+                    # Wait for suggestions
+                    suggestions = page.query_selector_all("ul[role='listbox'] li, div[role='option']")
+                    if suggestions:
+                        # Filter suggestions - skip "Current Location", etc.
+                        for sug in suggestions:
+                            try:
+                                text = sug.inner_text().lower()
+                                if any(skip in text for skip in ['current location', 'search by commute', 'popular searches']):
+                                    continue
+                                if location.lower() in text or ',' in text:
+                                    sug.click()
+                                    search_submitted = True
+                                    time.sleep(3)
+                                    print(f"[LocationSearcher] ✓ Clicked suggestion: {sug.inner_text()[:50]}")
+                                    break
+                            except:
+                                continue
+                except Exception as e:
+                    print(f"[LocationSearcher] Error with suggestions: {e}")
+                
+                if not search_submitted:
+                    # Press Enter
+                    print(f"[LocationSearcher] Pressing Enter...")
+                    search_box.press("Enter")
+                    time.sleep(3)
+                
+                # Wait for navigation
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except:
+                    time.sleep(2)  # Fallback wait
+                
+                final_url = page.url
+                print(f"[LocationSearcher] Playwright final URL: {final_url}")
+                logger.info(f"[LocationSearcher] Trulia Playwright final URL: {final_url}")
+                
+                browser.close()
+                
+                if 'trulia.com' in final_url and final_url != 'https://www.trulia.com' and final_url != 'https://www.trulia.com/':
+                    return final_url
+                
+                return None
+                
+        except ImportError:
+            print(f"[LocationSearcher] Playwright not available")
+            logger.warning(f"[LocationSearcher] Playwright not installed")
+            return None
+        except Exception as e:
+            print(f"[LocationSearcher] Playwright error: {e}")
+            logger.error(f"[LocationSearcher] Playwright error for Trulia: {e}")
+            import traceback
+            print(f"[LocationSearcher] Traceback: {traceback.format_exc()}")
+            return None
+    
+    @classmethod
+    def _search_trulia_with_selenium(cls, location: str) -> Optional[str]:
+        """Search Trulia using Selenium (fallback method)."""
         driver = None
         try:
             location_clean = location.strip()
-            logger.info(f"[LocationSearcher] Searching Trulia for: {location_clean}")
+            print(f"[LocationSearcher] Trying Selenium for Trulia: {location_clean}")
             
-            # Try without proxy first - Zyte proxy doesn't work well with Selenium interactive automation
-            # Main scrapers use scrapy-zyte-api (HTTP), not Selenium proxy
-            # Main scrapers use scrapy-zyte-api (HTTP API), not Selenium proxy
-            # Zyte proxy via --proxy-server doesn't work well with Selenium interactive automation
-            # Use local Chrome without proxy (FSBO proved this works)
             driver = cls._get_driver(use_zyte_proxy=False)
             driver.get("https://www.trulia.com")
             
             wait = WebDriverWait(driver, 20)
-            # Wait for page to load
             try:
                 wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                time.sleep(3)  # Additional wait for dynamic content
+                time.sleep(3)
             except:
-                time.sleep(5)  # Fallback wait
+                time.sleep(5)
             
-            print(f"[LocationSearcher] Looking for Trulia search box...")
+            print(f"[LocationSearcher] Looking for Trulia search box with Selenium...")
             
-            # Check if page is blocked (CAPTCHA or access denied)
+            # Check if page is blocked
             page_title = driver.title.lower()
             if 'access denied' in page_title or 'captcha' in page_title or 'blocked' in page_title:
                 print(f"[LocationSearcher] Page appears blocked: {driver.title}")
-                logger.warning(f"[LocationSearcher] Trulia page may be blocked: {driver.title}")
-                # Still try to find search box, but log warning
+                return None
             
             search_box = None
             
-            # Strategy 1: Try specific selectors with wait for clickable
+            # Try specific selectors
             search_selectors = [
                 "input[data-testid='location-search-input']",
                 "input#banner-search",
                 "input[aria-label*='Search for City' i]",
-                "input[aria-label*='Search' i][aria-label*='City' i]",
                 "input.react-autosuggest__input",
                 "input[placeholder*='Search' i]",
                 "input[placeholder*='City' i]",
@@ -720,104 +931,85 @@ class LocationSearcher:
             
             for selector in search_selectors:
                 try:
-                    print(f"[LocationSearcher] Trying selector: {selector}")
                     search_box = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
                     if search_box.is_displayed() and search_box.is_enabled():
-                        print(f"[LocationSearcher] ✓ Found Trulia search box: {selector}")
+                        print(f"[LocationSearcher] ✓ Found Trulia search box with Selenium: {selector}")
                         break
                     else:
                         search_box = None
-                except TimeoutException:
-                    search_box = None
-                    continue
-                except Exception as e:
-                    print(f"[LocationSearcher] Error with selector {selector}: {e}")
-                    search_box = None
+                except:
                     continue
                 
                 if search_box:
                     break
             
-            # Strategy 2: Find by placeholder text (like FSBO)
+            # Find by placeholder
             if not search_box:
                 try:
-                    print(f"[LocationSearcher] Trying placeholder text search...")
                     all_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text'], input[placeholder]")
                     for inp in all_inputs:
                         try:
                             if inp.is_displayed() and inp.is_enabled():
                                 placeholder = (inp.get_attribute('placeholder') or '').lower()
                                 aria_label = (inp.get_attribute('aria-label') or '').lower()
-                                # Trulia might have "Search for City", "Enter a city", etc.
-                                if any(keyword in placeholder or keyword in aria_label for keyword in ['search', 'city', 'location', 'address']):
+                                if any(keyword in placeholder or keyword in aria_label for keyword in ['search', 'city', 'location']):
                                     search_box = inp
-                                    print(f"[LocationSearcher] ✓ Found Trulia search box by placeholder/aria-label")
-                                    logger.info(f"[LocationSearcher] Found Trulia search box by placeholder: {placeholder[:50]}...")
+                                    print(f"[LocationSearcher] ✓ Found Trulia search box by placeholder")
                                     break
                         except:
                             continue
-                except Exception as e:
-                    print(f"[LocationSearcher] Placeholder search failed: {e}")
+                except:
+                    pass
             
             if not search_box:
-                # Fallback to URL construction if search box not found
-                print(f"[LocationSearcher] Search box not found after all strategies, trying URL construction fallback...")
-                return cls._try_construct_trulia_url(location_clean)
+                print(f"[LocationSearcher] Search box not found with Selenium")
+                return None
             
-            # Get initial URL
-            initial_url = driver.current_url
-            
-            # Enter location
+            # Interact with search box
+            search_box.click()
+            time.sleep(0.5)
             search_box.clear()
+            time.sleep(0.5)
             search_box.send_keys(location_clean)
-            time.sleep(2)  # Wait for autocomplete
+            time.sleep(2)
             
-            # Try clicking first suggestion or pressing Enter
+            # Try suggestions or Enter
             search_submitted = False
             try:
                 suggestions = WebDriverWait(driver, 5).until(
                     EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul[role='listbox'] li, div[role='option']"))
                 )
-                if suggestions:
-                    # Filter suggestions - skip "Current Location", "Search by commute time", etc.
-                    for sug in suggestions:
-                        try:
-                            text = sug.text.lower()
-                            if any(skip in text for skip in ['current location', 'search by commute', 'popular searches']):
-                                continue
-                            if location_clean.lower() in text or ',' in text:
-                                sug.click()
-                                search_submitted = True
-                                time.sleep(3)
-                                break
-                        except:
+                for sug in suggestions:
+                    try:
+                        text = sug.text.lower()
+                        if any(skip in text for skip in ['current location', 'search by commute']):
                             continue
+                        if location_clean.lower() in text or ',' in text:
+                            sug.click()
+                            search_submitted = True
+                            time.sleep(3)
+                            break
+                    except:
+                        continue
             except:
                 pass
             
             if not search_submitted:
-                # Press Enter as fallback
                 search_box.send_keys(Keys.RETURN)
                 time.sleep(3)
             
-            # Get final URL
             final_url = driver.current_url
-            logger.info(f"[LocationSearcher] Trulia final URL: {final_url}")
+            print(f"[LocationSearcher] Selenium final URL: {final_url}")
+            logger.info(f"[LocationSearcher] Trulia Selenium final URL: {final_url}")
             
             if 'trulia.com' in final_url and final_url != 'https://www.trulia.com':
                 return final_url
             
-            # If URL didn't change, try URL construction
-            return cls._try_construct_trulia_url(location_clean)
+            return None
             
-        except TimeoutException:
-            logger.error(f"[LocationSearcher] Timeout waiting for Trulia search box")
-            # Fallback to URL construction
-            return cls._try_construct_trulia_url(location)
         except Exception as e:
-            logger.error(f"[LocationSearcher] Error searching Trulia: {e}")
-            # Fallback to URL construction
-            return cls._try_construct_trulia_url(location)
+            logger.error(f"[LocationSearcher] Selenium error for Trulia: {e}")
+            return None
         finally:
             if driver:
                 driver.quit()
