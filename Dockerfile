@@ -35,6 +35,7 @@ RUN python -c "import selenium; from selenium import webdriver; print('✓ selen
 
 # Install Playwright system dependencies manually (for Debian Trixie compatibility)
 # Playwright's install-deps has issues with newer Debian versions, so we install manually
+# Also install xvfb (X Virtual Framebuffer) for non-headless browser testing on headless servers
 RUN apt-get update && apt-get install -y \
     fonts-unifont \
     fonts-liberation \
@@ -57,6 +58,7 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Playwright browsers for location searches (Trulia, etc.)
@@ -67,6 +69,9 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 # Copy the rest of the application
 COPY . .
 
+# Make xvfb helper script executable (if it exists)
+RUN if [ -f /app/start-with-xvfb.sh ]; then chmod +x /app/start-with-xvfb.sh; fi
+
 # Expose the port Railway provides (default is often 8080, but Railway sets $PORT)
 EXPOSE 8080
 
@@ -74,6 +79,6 @@ EXPOSE 8080
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
-# Start command using Gunicorn (using 1 worker to maintain in-memory state consistency)
-# Increased timeout to 120 seconds to handle Selenium operations
-CMD ["sh", "-c", "gunicorn -w 1 -b 0.0.0.0:$PORT --timeout 120 --keep-alive 5 api_server:app"]
+# Start command using the xvfb helper script (auto-starts xvfb if HEADLESS_BROWSER=false)
+# The script will start xvfb if needed, then run Gunicorn
+CMD ["/app/start-with-xvfb.sh", "sh", "-c", "gunicorn -w 1 -b 0.0.0.0:$PORT --timeout 120 --keep-alive 5 api_server:app"]

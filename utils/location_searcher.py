@@ -30,13 +30,79 @@ class LocationSearcher:
         Check if browser should run in headless mode.
         Can be toggled via HEADLESS_BROWSER environment variable.
         Default: True (headless)
-        Set HEADLESS_BROWSER=false to see browser window
+        Set HEADLESS_BROWSER=false to see browser window.
+        
+        For Linux servers without XServer:
+        - Option 1: Use xvfb-run (X Virtual Framebuffer) - see setup instructions
+        - Option 2: Set DISPLAY=:99 and start xvfb manually
+        - Option 3: Let it auto-detect and force headless
+        
+        For Windows/Mac:
+        - Works directly with HEADLESS_BROWSER=false
         """
+        import sys
+        import subprocess
+        
+        # Check user preference first
         headless_env = os.getenv("HEADLESS_BROWSER", "true").lower()
-        use_headless = headless_env not in ["false", "0", "no", "off"]
-        if not use_headless:
-            print(f"[LocationSearcher] ⚠️ Running in NON-HEADLESS mode (HEADLESS_BROWSER=false)")
-        return use_headless
+        user_wants_headless = headless_env not in ["false", "0", "no", "off"]
+        
+        # If user explicitly wants headless, use it
+        if user_wants_headless:
+            return True
+        
+        # User wants non-headless - check if display is available
+        # On Windows/Mac, GUI is available
+        # On Linux, check DISPLAY environment variable or if xvfb is available
+        has_display = False
+        if sys.platform == "win32" or sys.platform == "darwin":
+            has_display = True
+            print(f"[LocationSearcher] ✓ GUI available on {sys.platform}")
+        elif sys.platform.startswith("linux"):
+            # On Linux, check if DISPLAY is set
+            display = os.getenv("DISPLAY")
+            if display:
+                has_display = True
+                print(f"[LocationSearcher] ✓ DISPLAY environment variable set: {display}")
+            else:
+                # Check if xvfb is installed (for virtual display)
+                try:
+                    result = subprocess.run(
+                        ["which", "xvfb-run"],
+                        capture_output=True,
+                        timeout=2
+                    )
+                    xvfb_available = result.returncode == 0
+                    
+                    if xvfb_available:
+                        # xvfb is available - we can use it but need to set DISPLAY
+                        # For now, let's try to auto-setup DISPLAY
+                        print(f"[LocationSearcher] ⚠️ xvfb-run found but DISPLAY not set. Attempting to start virtual display...")
+                        # Try to detect an available display number
+                        # For now, we'll use DISPLAY=:99 and let the system handle it
+                        # The user should start xvfb manually or use xvfb-run wrapper
+                        print(f"[LocationSearcher] 💡 To use non-headless on Linux server:")
+                        print(f"[LocationSearcher]   1. Start xvfb: Xvfb :99 -screen 0 1920x1080x24 &")
+                        print(f"[LocationSearcher]   2. Set DISPLAY: export DISPLAY=:99")
+                        print(f"[LocationSearcher]   3. Or use xvfb-run wrapper script")
+                        has_display = False  # Still need DISPLAY to be set
+                    else:
+                        print(f"[LocationSearcher] ⚠️ xvfb-run not found. Install with: apt-get install xvfb")
+                        has_display = False
+                except Exception as e:
+                    print(f"[LocationSearcher] Could not check for xvfb: {e}")
+                    has_display = False
+        
+        # If no display available, force headless even if user requested non-headless
+        if not has_display:
+            print(f"[LocationSearcher] ⚠️ HEADLESS_BROWSER=false but no XServer/DISPLAY available. Forcing headless mode.")
+            print(f"[LocationSearcher] Platform: {sys.platform}, DISPLAY: {os.getenv('DISPLAY', 'not set')}")
+            return True
+        
+        # Display is available and user wants non-headless
+        print(f"[LocationSearcher] ⚠️ Running in NON-HEADLESS mode (HEADLESS_BROWSER=false)")
+        print(f"[LocationSearcher] Browser window will be visible (if running locally or with VNC)")
+        return False
     
     @classmethod
     def _get_driver(cls, use_zyte_proxy: bool = True):
