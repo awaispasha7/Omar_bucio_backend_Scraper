@@ -463,11 +463,14 @@ class HotPadsSpider(scrapy.Spider):
                         # Sometimes the detail itself is the main entity
                         main_entity = detail
                     
-                    # Extract name
+                    # Extract name - filter out question-like text (FAQ schemas)
                     if not jsonld_name:
                         name_val = main_entity.get('name')
                         if name_val:
-                            jsonld_name = name_val.strip() if isinstance(name_val, str) else str(name_val).strip()
+                            name_str = name_val.strip() if isinstance(name_val, str) else str(name_val).strip()
+                            # Filter out question-like text (FAQ schemas often have questions as names)
+                            if name_str and not ('?' in name_str or name_str.startswith(('How ', 'What ', 'Where ', 'When ', 'Why ', 'Who '))):
+                                jsonld_name = name_str
                     
                     # Extract phone
                     if not jsonld_phone:
@@ -670,6 +673,18 @@ class HotPadsSpider(scrapy.Spider):
 
         self.logger.info(f"🛏️ EXTRACTED (XPath): {xpath_beds} beds, {xpath_baths} baths, {xpath_sqft} sqft")
 
+        # Extract property name via XPath (fallback if JSON-LD name is invalid)
+        xpath_name = ''
+        # Try h1 first (most common for property names)
+        xpath_name = response.xpath("//h1/text()").get('')
+        if not xpath_name:
+            # Try title tag and clean it up
+            title = response.xpath("//title/text()").get('')
+            if title:
+                # Remove common suffixes like " - HotPads" or " | HotPads"
+                xpath_name = title.split(' - ')[0].split(' | ')[0].strip()
+        xpath_name = xpath_name.strip() if xpath_name else ''
+
         # Extract contact info (XPath only, no JSON-LD equivalent)
         xpath_contact_name = response.xpath("//div[@class='ContactListedBy-name']/h2/text()[2]").get('')
         xpath_contact_name = xpath_contact_name.strip() if xpath_contact_name else ''
@@ -719,10 +734,13 @@ class HotPadsSpider(scrapy.Spider):
                 detail_baths = ''
                 detail_url = ''
                 
-                # Extract name
+                # Extract name - filter out question-like text (FAQ schemas)
                 name_val = main_entity.get('name')
                 if name_val:
-                    detail_name = name_val.strip() if isinstance(name_val, str) else str(name_val).strip()
+                    name_str = name_val.strip() if isinstance(name_val, str) else str(name_val).strip()
+                    # Filter out question-like text (FAQ schemas often have questions as names)
+                    if name_str and not ('?' in name_str or name_str.startswith(('How ', 'What ', 'Where ', 'When ', 'Why ', 'Who '))):
+                        detail_name = name_str
                 
                 # Extract phone
                 phone_val = main_entity.get('telephone')
@@ -808,7 +826,8 @@ class HotPadsSpider(scrapy.Spider):
                         detail_url = response.urljoin(detail_url)
                 
                 # Use detail-specific values or fall back to general JSON-LD or XPath
-                final_name = detail_name or jsonld_name or ''
+                # Prefer valid JSON-LD name, but fall back to XPath if JSON-LD name looks like a question
+                final_name = detail_name or jsonld_name or xpath_name or ''
                 final_phone = detail_phone or jsonld_phone or ''
                 final_address = detail_address or jsonld_address or ''
                 final_price = detail_price or jsonld_price or xpath_price or ''
@@ -862,7 +881,7 @@ class HotPadsSpider(scrapy.Spider):
             clean_url = response.url.split('#')[0]
             
             item = {
-                'Name': '',  # No XPath equivalent
+                'Name': xpath_name,  # Use XPath-extracted name
                 'Contact Name': xpath_contact_name,
                 'Contact Company': xpath_contact_company,
                 'Email': xpath_email,
