@@ -556,6 +556,9 @@ class HotPadsSpider(scrapy.Spider):
                         url_val = main_entity.get('url')
                         if url_val:
                             jsonld_url = url_val.strip() if isinstance(url_val, str) else str(url_val).strip()
+                            # Normalize to absolute URL if relative
+                            if jsonld_url and not jsonld_url.startswith('http'):
+                                jsonld_url = response.urljoin(jsonld_url)
                     
                     # Break after first valid entry (we'll handle multiple entries in item creation)
                     break
@@ -800,6 +803,9 @@ class HotPadsSpider(scrapy.Spider):
                 url_val = main_entity.get('url')
                 if url_val:
                     detail_url = url_val.strip() if isinstance(url_val, str) else str(url_val).strip()
+                    # Normalize to absolute URL if relative
+                    if detail_url and not detail_url.startswith('http'):
+                        detail_url = response.urljoin(detail_url)
                 
                 # Use detail-specific values or fall back to general JSON-LD or XPath
                 final_name = detail_name or jsonld_name or ''
@@ -809,7 +815,11 @@ class HotPadsSpider(scrapy.Spider):
                 final_sqft = detail_sqft or jsonld_sqft or xpath_sqft or ''
                 final_beds = detail_beds or jsonld_beds or xpath_beds or ''
                 final_baths = detail_baths or jsonld_baths or xpath_baths or ''
+                
+                # Normalize URL to absolute URL
                 final_url = detail_url or jsonld_url or response.url
+                if final_url and not final_url.startswith('http'):
+                    final_url = response.urljoin(final_url)
                 
                 # Generate unique URL if multiple details
                 if len(jsonld_details) > 1:
