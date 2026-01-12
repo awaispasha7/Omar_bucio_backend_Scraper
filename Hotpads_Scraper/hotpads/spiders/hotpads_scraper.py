@@ -2,6 +2,7 @@ import json
 import pandas as pd
 import scrapy
 import os
+import re
 from pathlib import Path
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -224,7 +225,11 @@ class HotPadsSpider(scrapy.Spider):
                     self.logger.error(f"Could not log body snippet: {e}")
 
         # Normalize to absolute URLs and filter to only include actual listing URLs
+        # Listing URL pattern: /{address-slug}/pad?query-params
+        # Example: https://hotpads.com/2617-napoleon-st-houston-tx-77004-1kv3apk/pad?isListedByOwner=true...
         listing_urls_normalized = []
+        rejected_urls = []
+        
         for url in listing_urls:
             if not url: continue
             full_url = response.urljoin(url) if not url.startswith('http') else url
@@ -236,35 +241,52 @@ class HotPadsSpider(scrapy.Spider):
             # Remove hash fragments (e.g., #index-0) - these are category/pagination indicators
             full_url = full_url.split('#')[0]
             
-            # Filter: Only include URLs that look like actual listings
-            # Accept: URLs with /pad/ (individual listings) or /building/ (building pages)
-            # Reject: Category/filter URLs (e.g., /apartments-for-rent-with-..., /affordable-apartments-for-rent)
-            is_listing_url = False
+            # Extract URL path (without query params) for pattern matching
+            url_path = full_url.split('?')[0]
             
-            # Check for /pad/ pattern (individual listings)
-            if '/pad/' in full_url or '/pad' in full_url.split('/')[-1]:
-                is_listing_url = True
-            # Check for /building/ pattern (building pages that contain multiple units)
-            elif '/building/' in full_url:
-                is_listing_url = True
-            # Reject category/filter URLs (common patterns)
-            elif any(pattern in full_url for pattern in [
+            # Filter: Only include URLs that look like actual listings
+            # Reject: Category/filter URLs (e.g., /apartments-for-rent-with-..., /affordable-apartments-for-rent)
+            
+            # First, reject category/filter URLs in the PATH (not query params - query params are OK on listing URLs)
+            # Category URLs have patterns like: /houston-tx/for-rent-by-owner, /houston-tx/apartments-for-rent
+            is_category_url = any(pattern in url_path for pattern in [
                 '/apartments-for-rent-with-',
                 '/affordable-apartments-for-rent',
                 '/loft-apartments-for-rent',
                 '/apartments-for-rent',
                 '/for-rent-by-owner',
                 '/for-rent',
-            ]):
-                # Skip category URLs
+            ])
+            
+            if is_category_url:
+                rejected_urls.append(full_url)
                 continue
+            
+            # Accept URLs that contain /pad or /building (actual listings)
+            # Pattern: /{address-slug}/pad or /{address-slug}/pad?query-params
+            is_listing_url = False
+            
+            # Check for /pad pattern (individual listings) - can be /pad, /pad/, or /pad?query
+            if '/pad' in url_path:
+                is_listing_url = True
+            # Check for /building/ pattern (building pages that contain multiple units)
+            elif '/building/' in url_path:
+                is_listing_url = True
             
             if is_listing_url:
                 listing_urls_normalized.append(full_url)
+            else:
+                rejected_urls.append(full_url)
+        
+        # Log diagnostic info if no URLs passed filtering
+        if len(listing_urls_normalized) == 0 and len(listing_urls) > 0:
+            self.logger.warning(f"Filtering rejected all {len(listing_urls)} URLs. Sample rejected URLs (first 5):")
+            for rejected in rejected_urls[:5]:
+                self.logger.warning(f"  Rejected: {rejected}")
         
         # Remove duplicates
         listing_urls = list(dict.fromkeys(listing_urls_normalized))
-        self.logger.info(f"Found {len(listing_urls)} unique listing URLs to process (filtered to /pad/ and /building/ URLs only)")
+        self.logger.info(f"Found {len(listing_urls)} unique listing URLs to process (filtered from {len(listing_urls) + len(rejected_urls)} total URLs)")
 
         # Record first listing for state update (assuming newest)
         if not self._first_listing_url and listing_urls:
