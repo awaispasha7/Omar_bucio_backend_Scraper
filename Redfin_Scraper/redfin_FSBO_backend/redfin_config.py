@@ -41,4 +41,4 @@ OUTPUT_FIELDS = [
 ]
 
 # ==================== URL Constants ====================
-BASE_URL = 'https://www.zillow.com'
+BASE_URL = 'https://www.redfin.com'
