@@ -478,7 +478,15 @@ class ApartmentsFrboSpider(scrapy.Spider):
         
         # IMPROVEMENT: Try to extract JSON-LD data first (bulk extraction from search page)
         self.logger.info(f"🔍 Page {self._page_count}: Attempting JSON-LD bulk extraction...")
-        json_listings = self._extract_from_json(response)
+        json_listings = []
+        try:
+            json_listings = self._extract_from_json(response)
+        except Exception as json_error:
+            self.logger.error(f"❌ _extract_from_json() raised exception: {type(json_error).__name__}: {json_error}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
+            json_listings = []
+        
         json_ld_success = False
         if json_listings:
             json_ld_success = True
@@ -498,9 +506,18 @@ class ApartmentsFrboSpider(scrapy.Spider):
             if self.supabase and normalized_urls:
                 try:
                     # Apartments uses 'apartments_frbo' table in Supabase
-                    response = self.supabase.table("apartments_frbo").select("listing_url").in_("listing_url", normalized_urls).execute()
-                    existing_urls = {row['listing_url'] for row in response.data}
-                    self.logger.info(f"Check results: {len(existing_urls)} listings already exist in database")
+                    supabase_resp = (
+                        self.supabase
+                        .table("apartments_frbo")
+                        .select("listing_url")
+                        .in_("listing_url", normalized_urls)
+                        .execute()
+                    )
+                    if supabase_resp and hasattr(supabase_resp, 'data') and supabase_resp.data:
+                        existing_urls = {row['listing_url'] for row in supabase_resp.data}
+                        self.logger.info(f"Check results: {len(existing_urls)} listings already exist in database")
+                    else:
+                        self.logger.warning(f"⚠️ Supabase response is empty or invalid")
                 except Exception as e:
                     self.logger.error(f"Error checking Supabase existence: {e}")
 
