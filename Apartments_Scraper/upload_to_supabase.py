@@ -149,6 +149,7 @@ def create_table_sql() -> str:
         zip_code TEXT,
         neighborhood TEXT,
         description TEXT,
+        address_hash TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
@@ -161,11 +162,15 @@ def create_table_sql() -> str:
     
     -- Create index on zip_code for filtering
     CREATE INDEX IF NOT EXISTS idx_apartments_zip_code ON apartments_frbo(zip_code);
+    
+    -- Create index on address_hash for enrichment lookups
+    CREATE INDEX IF NOT EXISTS idx_apartments_address_hash ON apartments_frbo(address_hash);
     """
 
 
 def read_csv_file(csv_path: str) -> List[Dict]:
     """Read CSV file and return list of dictionaries."""
+    import hashlib
     listings = []
     with open(csv_path, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
@@ -177,6 +182,15 @@ def read_csv_file(csv_path: str) -> List[Dict]:
                     cleaned_row[key] = value.strip()
                 else:
                     cleaned_row[key] = None
+            
+            # Generate address_hash for enrichment tracking
+            full_address = cleaned_row.get('full_address')
+            if full_address:
+                normalized_address = full_address.strip().lower()
+                cleaned_row['address_hash'] = hashlib.md5(normalized_address.encode()).hexdigest()
+            else:
+                cleaned_row['address_hash'] = None
+            
             listings.append(cleaned_row)
     return listings
 

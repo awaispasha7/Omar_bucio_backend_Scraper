@@ -328,6 +328,18 @@ class SupabasePipeline:
                 # Convert empty strings to None for better database handling
                 item_dict[field] = value.strip() if value and str(value).strip() else None
             
+            # Generate address_hash for enrichment tracking
+            # This is required even if enrichment is disabled
+            import hashlib
+            full_address = item_dict.get("full_address")
+            if full_address:
+                # Normalize address and generate hash (same as EnrichmentManager)
+                normalized_address = full_address.strip().lower()
+                address_hash = hashlib.md5(normalized_address.encode()).hexdigest()
+                item_dict["address_hash"] = address_hash
+            else:
+                item_dict["address_hash"] = None
+            
             # Add to batch
             self.batch.append(item_dict)
             

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS apartments_frbo (
     zip_code TEXT,
     neighborhood TEXT,
     description TEXT,
+    address_hash TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -29,6 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_apartments_listing_url ON apartments_frbo(listing
 CREATE INDEX IF NOT EXISTS idx_apartments_city ON apartments_frbo(city);
 CREATE INDEX IF NOT EXISTS idx_apartments_zip_code ON apartments_frbo(zip_code);
 CREATE INDEX IF NOT EXISTS idx_apartments_state ON apartments_frbo(state);
+CREATE INDEX IF NOT EXISTS idx_apartments_address_hash ON apartments_frbo(address_hash);
 
 -- Create a function to automatically update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
