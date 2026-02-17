@@ -128,12 +128,15 @@ CORS(app, resources={
 
 @app.after_request
 def _cors_allow_lovable_after_request(response):
-    """Allow CORS for Lovable preview subdomains (*.lovableproject.com) and other allowed origins."""
+    """Allow CORS for Lovable preview subdomains (*.lovableproject.com) and other allowed origins.
+    Also set Allow-Headers and Allow-Methods so preflight (OPTIONS) succeeds when origin is allowed."""
     if not request.path.startswith("/api/"):
         return response
     origin = request.headers.get("Origin")
     if origin and _is_allowed_origin(origin):
         response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     return response
 
 
