@@ -77,9 +77,34 @@ from utils.url_detector import URLDetector
 from utils.table_router import TableRouter
 
 app = Flask(__name__)
-# Enable CORS for all routes - allows frontend to call backend API
-# Explicitly allow all origins and methods for Railway deployment
+
+# CORS: Trulia & Hotpads scraper + dashboard routes only — allow production frontend and local dev
+_FRONTEND_ORIGINS = [
+    "https://www.brivano.io",
+    "https://brivano.io",
+    "http://localhost:5173",
+]
+_CORS_OPTS = {
+    "methods": ["GET", "POST", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization"],
+}
+# Trulia/Hotpads and scraper-dashboard routes: restrict origin to frontend deployments
 CORS(app, resources={
+    r"/api/geocode": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/skip-trace": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/search-location": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/trigger-from-url": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/trigger-hotpads": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/status-hotpads": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/hotpads/reset": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/hotpads/last-result": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/trigger-trulia": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/status-trulia": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/trulia/last-result": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/trigger-redfin": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/status-redfin": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/redfin/last-result": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    # All other /api/* routes (other scrapers): unchanged, allow all origins
     r"/api/*": {
         "origins": "*",
         "methods": ["GET", "POST", "OPTIONS"],
@@ -480,7 +505,9 @@ def geocode_proxy():
     """Proxy to Nominatim for geocoding so the frontend avoids CORS/403 when calling from the browser."""
     if request.method == 'OPTIONS':
         r = jsonify({})
-        r.headers.add('Access-Control-Allow-Origin', '*')
+        origin = request.headers.get("Origin", "")
+        if origin in _FRONTEND_ORIGINS:
+            r.headers.add('Access-Control-Allow-Origin', origin)
         r.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         r.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         return r
@@ -495,12 +522,16 @@ def geocode_proxy():
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
         response = jsonify(data)
-        response.headers.add('Access-Control-Allow-Origin', '*')
+        origin = request.headers.get("Origin", "")
+        if origin in _FRONTEND_ORIGINS:
+            response.headers.add('Access-Control-Allow-Origin', origin)
         return response
     except Exception as e:
         add_log(f"Geocode failed for q={q[:50]!r}: {e}", "warning")
         response = jsonify([])
-        response.headers.add('Access-Control-Allow-Origin', '*')
+        origin = request.headers.get("Origin", "")
+        if origin in _FRONTEND_ORIGINS:
+            response.headers.add('Access-Control-Allow-Origin', origin)
         return response
 
 
@@ -552,10 +583,12 @@ def _parse_batchdata_to_skip_trace_result(raw, address_data):
 def skip_trace():
     """Single-address skip trace via BatchData (replaces Supabase Edge Function for Skip Trace button)."""
     if request.method == 'OPTIONS':
-        # CORS preflight: must return 200 so browser allows the POST from localhost:5173
+        # CORS preflight: allow frontend (brivano.io / localhost)
         r = jsonify({"ok": True})
         r.status_code = 200
-        r.headers.add('Access-Control-Allow-Origin', '*')
+        origin = request.headers.get("Origin", "")
+        if origin in _FRONTEND_ORIGINS:
+            r.headers.add('Access-Control-Allow-Origin', origin)
         r.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         r.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         return r
@@ -575,7 +608,9 @@ def skip_trace():
         address_data = worker.parse_address_string(full_address)
         result = _parse_batchdata_to_skip_trace_result(raw, address_data)
         response = jsonify(result)
-        response.headers.add('Access-Control-Allow-Origin', '*')
+        origin = request.headers.get("Origin", "")
+        if origin in _FRONTEND_ORIGINS:
+            response.headers.add('Access-Control-Allow-Origin', origin)
         return response
     except Exception as e:
         add_log(f"Skip trace error: {e}", "error")
@@ -848,11 +883,56 @@ def trigger_redfin():
 
 @app.route('/api/status-redfin', methods=['GET'])
 def get_redfin_status():
+    if request.args.get("reset") in ("1", "true", "yes"):
+        redfin_status["running"] = False
+        redfin_status["error"] = None
+        add_log("Redfin status reset via status-redfin?reset=1", "info")
     return jsonify({
         "status": "running" if redfin_status["running"] else "idle",
         "last_run": redfin_status["last_run"],
         "error": redfin_status["error"]
     })
+
+
+def _redfin_listing_from_db_row(row):
+    """Map redfin_listings row to same shape as Hotpads/Trulia for frontend."""
+    def str_or_none(v):
+        return (v or "").strip() or None
+    return {
+        "address": str_or_none(row.get("address")),
+        "bedrooms": _safe_int(row.get("beds")),
+        "bathrooms": _safe_float(row.get("baths")),
+        "price": str_or_none(row.get("price")),
+        "owner_name": str_or_none(row.get("owner_name") or row.get("name")),
+        "owner_phone": str_or_none(row.get("phones") or row.get("phone_number")),
+        "listing_url": str_or_none(row.get("listing_link") or row.get("url")),
+        "square_feet": _safe_int(row.get("square_feet")),
+        "source_platform": "redfin",
+        "listing_type": "sale",
+    }
+
+
+@app.route('/api/redfin/last-result', methods=['GET'])
+def get_redfin_last_result():
+    """Return Redfin listings from Supabase redfin_listings (same pattern as Hotpads/Trulia last-result)."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+        if url and key:
+            supabase = create_client(url, key)
+            r = supabase.table("redfin_listings").select(
+                "address,price,beds,baths,owner_name,phones,listing_link,square_feet"
+            ).order("id", desc=True).limit(500).execute()
+            if r.data:
+                listings = [_redfin_listing_from_db_row(row) for row in r.data]
+                return jsonify({"listings": listings, "total": len(listings)})
+    except Exception as e:
+        add_log(f"Redfin last-result from Supabase failed: {e}", "warning")
+    return jsonify({"listings": [], "message": "No Redfin results yet. Run a Redfin scrape first."})
+
 
 @app.route('/api/trigger-trulia', methods=['POST', 'GET'])
 def trigger_trulia():
