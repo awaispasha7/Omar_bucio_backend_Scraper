@@ -1,0 +1,29 @@
+# Minimal requirements - no Playwright/Nodriver (avoids C++ build on Windows).
+# Use this if: pip install -r requirements.txt fails with "greenlet" / "Microsoft Visual C++ required".
+# Hotpads flow works with this (search-location for Hotpads uses URL construction, no browser).
+
+# Core
+scrapy==2.12.0
+scrapy-zyte-api==0.31.0
+itemadapter==0.10.0
+requests==2.31.0
+
+# Database
+supabase==2.24.0
+
+# Data
+pandas==2.2.3
+beautifulsoup4==4.12.2
+
+# Web Server
+flask==3.0.0
+flask-cors==4.0.0
+gunicorn==21.2.0
+
+# Browser (Selenium only - has pre-built wheels)
+selenium==4.15.2
+webdriver-manager==4.0.1
+
+# Utilities
+python-dotenv==1.0.0
+schedule==1.2.2

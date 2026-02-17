@@ -7,9 +7,16 @@ import re
 import logging
 from typing import Optional
 
-from .base import get_driver
-
+# No browser needed - Hotpads uses URL construction only
 logger = logging.getLogger(__name__)
+
+
+def _safe(s):
+    """Avoid Windows console charmap errors when logging/printing."""
+    try:
+        return str(s).encode("ascii", "replace").decode("ascii")
+    except Exception:
+        return repr(s)[:100]
 
 
 def construct_hotpads_url(location: str, property_type: str = "apartments") -> Optional[str]:
@@ -29,7 +36,7 @@ def construct_hotpads_url(location: str, property_type: str = "apartments") -> O
         Constructed Hotpads URL or None if location cannot be parsed
     """
     location_clean = location.strip()
-    logger.info(f"[Hotpads] Constructing Hotpads URL for: {location_clean}")
+    logger.info("[Hotpads] Constructing URL for: %s", _safe(location_clean))
     
     # State abbreviations mapping (full name -> abbrev)
     state_mapping = {
@@ -151,8 +158,8 @@ def construct_hotpads_url(location: str, property_type: str = "apartments") -> O
     
     # If no state found, we can't construct a valid URL
     if not state_abbrev:
-        logger.warning(f"[Hotpads] Could not extract state from location: {location_clean}")
-        print(f"[Hotpads] ⚠️ Could not extract state from location, falling back to browser automation")
+        logger.warning("[Hotpads] Could not extract state from location: %s", _safe(location_clean))
+        print("[Hotpads] Could not extract state from location")
         return None
     
     # If no city found, use the whole location as city (minus state)
@@ -165,8 +172,8 @@ def construct_hotpads_url(location: str, property_type: str = "apartments") -> O
         city = re.sub(r'[,\s]+', ' ', city).strip()
     
     if not city:
-        logger.warning(f"[Hotpads] Could not extract city from location: {location_clean}")
-        print(f"[Hotpads] ⚠️ Could not extract city from location, falling back to browser automation")
+        logger.warning("[Hotpads] Could not extract city from location: %s", _safe(location_clean))
+        print("[Hotpads] Could not extract city from location")
         return None
     
     # Convert city to URL format: lowercase, replace spaces/special chars with hyphens
@@ -177,18 +184,21 @@ def construct_hotpads_url(location: str, property_type: str = "apartments") -> O
     city_slug = re.sub(r'-+', '-', city_slug)  # Replace multiple hyphens with single
     city_slug = city_slug.strip('-')  # Remove leading/trailing hyphens
     
-    # Normalize property type (lowercase, handle plural/singular)
+    # Normalize property type. Frontend sends listing type (e.g. "for-rent") but Hotpads
+    # expects a real property type: apartments, houses, condos, townhomes.
     property_type_clean = property_type.lower().strip()
+    # Map listing-type values to valid Hotpads path segments
+    if property_type_clean in ('for-rent', 'for-rent-by-owner', 'frbo', 'rent', 'rentals', ''):
+        property_type_clean = 'apartments'
     # Ensure it ends with 's' for plural (apartments, houses, condos, townhomes)
-    if not property_type_clean.endswith('s') and property_type_clean not in ['condos', 'townhomes']:
-        # Add 's' if it's a singular form
+    elif not property_type_clean.endswith('s') and property_type_clean not in ['condos', 'townhomes']:
         if property_type_clean in ['apartment', 'house', 'condo', 'townhome']:
             property_type_clean = property_type_clean + 's'
     
-    # Construct URL with property type
+    # Construct URL with property type (Hotpads format: /city-state/apartments-for-rent)
     url = f"https://hotpads.com/{city_slug}-{state_abbrev}/{property_type_clean}-for-rent"
-    logger.info(f"[Hotpads] ✓ Constructed Hotpads URL: {url}")
-    print(f"[Hotpads] ✓ Constructed Hotpads URL directly: {url}")
+    logger.info("[Hotpads] Constructed URL: %s", _safe(url))
+    print(f"[Hotpads] Constructed URL: {_safe(url)}")
     return url
 
 
@@ -206,16 +216,16 @@ def search_hotpads(location: str, property_type: str = "apartments") -> Optional
         Constructed Hotpads URL or None if location cannot be parsed
     """
     location_clean = location.strip()
-    logger.info(f"[Hotpads] Searching Hotpads for: {location_clean} (property_type: {property_type})")
+    logger.info("[Hotpads] Searching for: %s (property_type: %s)", _safe(location_clean), _safe(property_type))
     
     # Construct URL directly (no browser needed!)
     url = construct_hotpads_url(location_clean, property_type)
     if url:
-        print(f"[Hotpads] ✓ Using direct URL construction (no browser needed)")
+        print("[Hotpads] Using direct URL construction (no browser needed)")
         return url
     
     # If URL construction failed, return None
-    logger.warning(f"[Hotpads] Could not construct Hotpads URL for: {location_clean}")
-    print(f"[Hotpads] ⚠️ Could not construct URL - location format may be invalid")
+    logger.warning("[Hotpads] Could not construct URL for: %s", _safe(location_clean))
+    print("[Hotpads] Could not construct URL - location format may be invalid")
     return None
 

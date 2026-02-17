@@ -28,6 +28,8 @@ class TruliaSpider(scrapy.Spider):
     _known_hits = 0
     
     def __init__(self, *args, **kwargs):
+        # Preserve URL from -a url=... (same as Hotpads: trigger-from-url passes URL)
+        self.url = kwargs.get("url") or kwargs.get("start_url")
         super(TruliaSpider, self).__init__(*args, **kwargs)
         self._known_hits = 0
         self._first_listing_url = None
@@ -38,10 +40,10 @@ class TruliaSpider(scrapy.Spider):
         env_path = project_root_env / '.env'
         load_dotenv(dotenv_path=env_path)
         
-        url = os.getenv("SUPABASE_URL")
+        supabase_url = os.getenv("SUPABASE_URL")
         key = os.getenv("SUPABASE_SERVICE_KEY")
-        if url and key:
-            self.supabase = create_client(url, key)
+        if supabase_url and key:
+            self.supabase = create_client(supabase_url, key)
             logger.info("Supabase client initialized for incremental check")
         else:
             self.supabase = None

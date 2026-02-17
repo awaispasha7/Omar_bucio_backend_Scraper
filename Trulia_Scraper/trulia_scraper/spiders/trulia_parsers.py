@@ -388,6 +388,17 @@ class TruliaJSONParser:
                                     detail_home.get('daysOnSite', '') or
                                     '')
             
+            # Owner/contact: Trulia often does not expose these in JSON; try common keys when present
+            contact = (detail_home.get('listingContact') or detail_home.get('contactInfo') or 
+                       detail_home.get('ownerInfo') or detail_home.get('agentInfo') or {})
+            if isinstance(contact, dict):
+                name = contact.get('name') or contact.get('displayName') or contact.get('businessName') or ''
+                phone = contact.get('phone') or contact.get('phoneNumber') or contact.get('formattedPhone') or ''
+                if name and 'Name' not in item:
+                    item['Name'] = name
+                if phone and 'Phone Number' not in item:
+                    item['Phone Number'] = phone
+            
             return item, property_id, beds_bath
             
         except Exception as e:

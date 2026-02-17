@@ -3,13 +3,70 @@ Simple Flask API server for Railway deployment
 Provides endpoints to trigger scraper and check status
 """
 
+import sys
+import io
+
+# Prevent Windows "charmap" codec errors: wrap stdout/stderr so writes never raise
+class _SafeTextStream(io.TextIOBase):
+    def __init__(self, stream):
+        self._stream = stream
+    def write(self, s):
+        if not s:
+            return 0
+        try:
+            return self._stream.write(s)
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            try:
+                safe = s.encode("utf-8", errors="replace").decode("utf-8")
+                return self._stream.write(safe)
+            except Exception:
+                return self._stream.write(s.encode("ascii", errors="replace").decode("ascii"))
+    def flush(self):
+        self._stream.flush()
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+def _install_safe_stdout_stderr():
+    if getattr(sys.stdout, "_safe_wrapped", False):
+        return
+    _old_stdout, _old_stderr = sys.stdout, sys.stderr
+    try:
+        if hasattr(sys.stdout, "buffer"):
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+        else:
+            sys.stdout = _SafeTextStream(sys.stdout)
+            sys.stderr = _SafeTextStream(sys.stderr)
+    except Exception:
+        try:
+            sys.stdout = _SafeTextStream(sys.stdout)
+            sys.stderr = _SafeTextStream(sys.stderr)
+        except Exception:
+            pass
+    try:
+        sys.stdout._safe_wrapped = True
+    except Exception:
+        pass
+    # Point any logging handlers still using old streams to the new safe streams
+    try:
+        import logging
+        for _root in (logging.root,):
+            for _h in getattr(_root, "handlers", []):
+                if getattr(_h, "stream", None) is _old_stdout:
+                    _h.stream = sys.stdout
+                elif getattr(_h, "stream", None) is _old_stderr:
+                    _h.stream = sys.stderr
+    except Exception:
+        pass
+
+_install_safe_stdout_stderr()
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import subprocess
 import os
+import json
 import threading
-import sys
 import time
 import queue
 import schedule
@@ -29,6 +86,14 @@ CORS(app, resources={
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
+
+
+@app.before_request
+def _log_request():
+    """Log every request so you can see in the terminal that the backend received it."""
+    if request.path.startswith("/api/"):
+        print(f"[BACKEND] {request.method} {request.path}", flush=True)
+
 
 # Global status dictionaries
 scraper_status = {"running": False, "last_run": None, "last_result": None, "error": None}
@@ -51,6 +116,99 @@ stop_all_requested = False
 LOG_BUFFER = []
 MAX_LOG_SIZE = 1000
 
+def _safe_console(s):
+    """Make string safe for Windows console (avoids charmap/codec errors)."""
+    if s is None:
+        return "None"
+    try:
+        return str(s).encode("ascii", "replace").decode("ascii")
+    except Exception:
+        return repr(s)[:200]
+
+
+def _hotpads_url_inline(location, property_type="apartments"):
+    """Build Hotpads URL in-process. No external modules, no logging - avoids encoding issues."""
+    import re
+    loc = (location or "").strip()
+    if not loc:
+        return None
+    city_to_state = {
+        "minneapolis": "mn", "new york": "ny", "los angeles": "ca", "chicago": "il",
+        "houston": "tx", "phoenix": "az", "philadelphia": "pa", "san antonio": "tx",
+        "san diego": "ca", "dallas": "tx", "austin": "tx", "seattle": "wa", "denver": "co",
+        "boston": "ma", "miami": "fl", "atlanta": "ga", "detroit": "mi", "portland": "or",
+        "washington": "dc", "san francisco": "ca", "san fracisco": "ca", "los angles": "ca",
+    }
+    slug_overrides = {
+        "san fracisco": "san-francisco", "los angles": "los-angeles",
+    }
+    state_abbrev = None
+    city = None
+    low = loc.lower()
+    if low in city_to_state:
+        state_abbrev = city_to_state[low]
+        city = loc
+    match = re.match(r"^(.+?),\s*([A-Za-z]{2})\s*$", loc)
+    if match:
+        city = match.group(1).strip()
+        state_abbrev = match.group(2).strip().lower()
+    if not state_abbrev:
+        space_match = re.match(r"^(.+?)\s+([A-Za-z]{2})\s*$", loc)
+        if space_match:
+            city = space_match.group(1).strip()
+            state_abbrev = space_match.group(2).strip().lower()
+    if not state_abbrev or not city:
+        return None
+    slug = re.sub(r"[^\w\s-]", "", city.lower())
+    slug = re.sub(r"\s+", "-", slug).strip("-")
+    slug = slug_overrides.get(low) or slug_overrides.get(city.lower()) or slug
+    if not slug:
+        return None
+    pt = (property_type or "apartments").lower().strip()
+    if pt in ("for-rent", "rent", "rentals", ""):
+        pt = "apartments"
+    if not pt.endswith("s") and pt in ("apartment", "house", "condo", "townhome"):
+        pt = pt + "s"
+    return f"https://hotpads.com/{slug}-{state_abbrev}/{pt}-for-rent"
+
+
+def _trulia_url_inline(location):
+    """Build Trulia FSBO URL in-process. Same supported cities as Hotpads. Do not touch Hotpads."""
+    import re
+    from urllib.parse import quote
+    loc = (location or "").strip()
+    if not loc:
+        return None
+    city_to_state = {
+        "minneapolis": "mn", "new york": "ny", "los angeles": "ca", "chicago": "il",
+        "washington": "dc", "san francisco": "ca", "san fracisco": "ca", "los angles": "ca",
+        "houston": "tx", "phoenix": "az", "philadelphia": "pa", "san antonio": "tx",
+        "san diego": "ca", "dallas": "tx", "austin": "tx", "seattle": "wa", "denver": "co",
+        "boston": "ma", "miami": "fl", "atlanta": "ga", "detroit": "mi", "portland": "or",
+    }
+    state_abbrev = None
+    city = None
+    low = loc.lower()
+    if low in city_to_state:
+        state_abbrev = city_to_state[low]
+        city = loc.strip()
+    match = re.match(r"^(.+?),\s*([A-Za-z]{2})\s*$", loc)
+    if match:
+        city = match.group(1).strip()
+        state_abbrev = match.group(2).strip().lower()
+    if not state_abbrev:
+        space_match = re.match(r"^(.+?)\s+([A-Za-z]{2})\s*$", loc)
+        if space_match:
+            city = space_match.group(1).strip()
+            state_abbrev = space_match.group(2).strip().lower()
+    if not state_abbrev or not city:
+        return None
+    # Trulia expects "City,ST" with no space after comma (e.g. Minneapolis,MN); space causes INVALID_LOCATION
+    location_str = f"{city},{state_abbrev.upper()}"
+    encoded = quote(location_str, safe=",")  # encode spaces in city name, keep comma
+    return f"https://www.trulia.com/for_sale/{encoded}/fsbo_lt/1_als/"
+
+
 def add_log(message, type="info"):
     """Add a log entry to the buffer"""
     entry = {
@@ -59,13 +217,12 @@ def add_log(message, type="info"):
         "type": type
     }
     LOG_BUFFER.append(entry)
-    # Print to server console as well, handled gracefully for Windows encoding
+    # Print to server console as well (flush so logs show immediately in terminal)
     try:
-        print(f"[{entry['timestamp']}] [{type.upper()}] {message}")
-    except UnicodeEncodeError:
-        # Fallback for consoles that don't support special characters/emojis
-        clean_message = message.encode('ascii', 'ignore').decode('ascii')
-        print(f"[{entry['timestamp']}] [{type.upper()}] {clean_message}")
+        print(f"[{entry['timestamp']}] [{type.upper()}] {message}", flush=True)
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        clean_message = _safe_console(message)
+        print(f"[{entry['timestamp']}] [{type.upper()}] {clean_message}", flush=True)
     
     # Keep buffer size manageable
     if len(LOG_BUFFER) > MAX_LOG_SIZE:
@@ -310,10 +467,119 @@ def health_check():
     response = jsonify({
         "status": "healthy",
         "service": "ForSaleByOwner Scraper API",
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "version": "2",
+        "trigger_from_url": "clears_already_running"
     })
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
+
+
+@app.route('/api/geocode', methods=['GET', 'OPTIONS'])
+def geocode_proxy():
+    """Proxy to Nominatim for geocoding so the frontend avoids CORS/403 when calling from the browser."""
+    if request.method == 'OPTIONS':
+        r = jsonify({})
+        r.headers.add('Access-Control-Allow-Origin', '*')
+        r.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        r.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        return r
+    q = request.args.get('q', '').strip()
+    if not q:
+        return jsonify({"error": "Missing query parameter 'q'"}), 400
+    try:
+        import urllib.request
+        import urllib.parse
+        url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + urllib.parse.quote(q)
+        req = urllib.request.Request(url, headers={"User-Agent": "BrivanoScout/1.0 (contact@brivano.io)"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        response = jsonify(data)
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
+    except Exception as e:
+        add_log(f"Geocode failed for q={q[:50]!r}: {e}", "warning")
+        response = jsonify([])
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
+
+
+def _parse_batchdata_to_skip_trace_result(raw, address_data):
+    """Convert BatchData API response to the same shape as Edge Function (SkipTraceResult)."""
+    out = {
+        "success": True,
+        "data": {
+            "fullName": None,
+            "firstName": None,
+            "lastName": None,
+            "phones": [],
+            "emails": [],
+            "confidence": 0,
+        },
+        "provider": "batchdata",
+    }
+    if not raw or raw.get("status", {}).get("code") != 200:
+        out["message"] = "No owner information found"
+        return out
+    results_obj = raw.get("results", {})
+    persons = results_obj.get("persons", [])
+    if not persons:
+        out["message"] = "No owner information found"
+        return out
+    first = persons[0]
+    owner = first.get("property", {}).get("owner", {}) or first
+    name_obj = owner.get("name", {}) or first.get("name", {})
+    first_name = name_obj.get("first") or name_obj.get("first_name")
+    last_name = name_obj.get("last") or name_obj.get("last_name")
+    full_name = (first_name and last_name and f"{first_name} {last_name}".strip()) or owner.get("fullName") or owner.get("name") or ""
+    out["data"]["fullName"] = full_name or None
+    out["data"]["firstName"] = first_name
+    out["data"]["lastName"] = last_name
+    for p in first.get("phoneNumbers", []) or first.get("phones", []) or []:
+        num = p.get("number") or p.get("phone") or p.get("phoneNumber") if isinstance(p, dict) else p
+        if num and isinstance(num, str):
+            out["data"]["phones"].append({"number": num, "type": p.get("type", "unknown") if isinstance(p, dict) else "unknown"})
+    for e in first.get("emails", []) or first.get("emailAddresses", []) or []:
+        addr = e.get("email") or e.get("address") or e.get("emailAddress") if isinstance(e, dict) else e
+        if addr and isinstance(addr, str):
+            out["data"]["emails"].append({"address": addr, "type": e.get("type") if isinstance(e, dict) else None})
+    if out["data"]["phones"] or out["data"]["emails"] or out["data"]["fullName"]:
+        out["data"]["confidence"] = 80
+    return out
+
+
+@app.route('/api/skip-trace', methods=['POST', 'OPTIONS'])
+def skip_trace():
+    """Single-address skip trace via BatchData (replaces Supabase Edge Function for Skip Trace button)."""
+    if request.method == 'OPTIONS':
+        # CORS preflight: must return 200 so browser allows the POST from localhost:5173
+        r = jsonify({"ok": True})
+        r.status_code = 200
+        r.headers.add('Access-Control-Allow-Origin', '*')
+        r.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        r.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        return r
+    try:
+        body = request.get_json() or {}
+        full_address = body.get("fullAddress") or ""
+        if not full_address and (body.get("address") or body.get("city") or body.get("state") or body.get("zip")):
+            parts = [body.get("address", "").strip(), body.get("city", "").strip(), body.get("state", "").strip(), body.get("zip", "").strip()]
+            full_address = ", ".join(p for p in parts if p)
+        if not full_address:
+            return jsonify({"success": False, "error": "Missing address or fullAddress"}), 400
+        from batchdata_worker import BatchDataWorker
+        worker = BatchDataWorker()
+        if not worker.api_key:
+            return jsonify({"success": False, "error": "BATCHDATA_API_KEY not configured"}), 500
+        raw = worker.call_batchdata(full_address)
+        address_data = worker.parse_address_string(full_address)
+        result = _parse_batchdata_to_skip_trace_result(raw, address_data)
+        response = jsonify(result)
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
+    except Exception as e:
+        add_log(f"Skip trace error: {e}", "error")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/trigger', methods=['POST', 'GET'])
@@ -429,9 +695,11 @@ def get_zillow_frbo_status():
 
 @app.route('/api/trigger-hotpads', methods=['POST', 'GET'])
 def trigger_hotpads():
+    # Always clear "already running" and start (no 400)
     if hotpads_status["running"]:
-        return jsonify({"error": "Hotpads Scraper is already running"}), 400
-        
+        hotpads_status["running"] = False
+        hotpads_status["error"] = None
+        add_log("Cleared Hotpads running state, starting new run.", "info")
     def worker():
         base_dir = os.path.dirname(os.path.abspath(__file__))
         scraper_dir = os.path.join(base_dir, "Hotpads_Scraper")
@@ -451,11 +719,111 @@ def trigger_hotpads():
 
 @app.route('/api/status-hotpads', methods=['GET'])
 def get_hotpads_status():
+    # Optional: ?reset=1 to clear running state (so trigger-from-url can start again)
+    if request.args.get("reset") in ("1", "true", "yes"):
+        hotpads_status["running"] = False
+        hotpads_status["error"] = None
+        add_log("Hotpads status reset via status-hotpads?reset=1", "info")
     return jsonify({
         "status": "running" if hotpads_status["running"] else "idle",
         "last_run": hotpads_status["last_run"],
         "error": hotpads_status["error"]
     })
+
+
+@app.route('/api/hotpads/reset', methods=['POST', 'GET'])
+def reset_hotpads_status():
+    """Clear Hotpads 'running' and 'error' state so a new scrape can be started (e.g. after a stuck run)."""
+    hotpads_status["running"] = False
+    hotpads_status["error"] = None
+    add_log("Hotpads status reset (running=False). You can start a new scrape.", "info")
+    return jsonify({"message": "Hotpads status reset", "status": "idle"})
+
+
+def _hotpads_listing_from_db_row(row):
+    """Map hotpads_listings table row to the JSON shape the frontend expects."""
+    def str_or_none(v):
+        return (v or "").strip() or None
+    return {
+        "address": str_or_none(row.get("address")),
+        "bedrooms": _safe_int(row.get("bedrooms")),
+        "bathrooms": _safe_float(row.get("bathrooms")),
+        "price": str_or_none(row.get("price")),
+        "owner_name": str_or_none(row.get("contact_name")),
+        "owner_phone": str_or_none(row.get("phone_number")),
+        "listing_url": str_or_none(row.get("url")),
+        "square_feet": _safe_int(row.get("square_feet")),
+        "source_platform": "hotpads",
+        "listing_type": "rent",
+    }
+
+
+@app.route('/api/hotpads/last-result', methods=['GET'])
+def get_hotpads_last_result():
+    """Return Hotpads listings from Supabase hotpads_listings so frontend and DB counts match. Fallback to CSV if DB unavailable."""
+    # 1) Prefer Supabase hotpads_listings (single source of truth)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+        if url and key:
+            supabase = create_client(url, key)
+            r = supabase.table("hotpads_listings").select(
+                "address,bedrooms,bathrooms,price,contact_name,phone_number,url,square_feet"
+            ).order("updated_at", desc=True).limit(500).execute()
+            if r.data:
+                listings = [_hotpads_listing_from_db_row(row) for row in r.data]
+                return jsonify({"listings": listings, "total": len(listings)})
+    except Exception as e:
+        add_log(f"Hotpads last-result from Supabase failed, trying CSV: {e}", "warning")
+    # 2) Fallback: CSV from scraper output
+    import csv
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(base_dir, "Hotpads_Scraper", "output", "Hotpads_Data.csv")
+    if not os.path.isfile(csv_path):
+        return jsonify({"listings": [], "message": "No results yet. Run a Hotpads scrape first."})
+    try:
+        listings = []
+        with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                listings.append({
+                    "address": (row.get("Address") or "").strip(),
+                    "bedrooms": _safe_int(row.get("Bedrooms")),
+                    "bathrooms": _safe_float(row.get("Bathrooms")),
+                    "price": (row.get("Price") or "").strip(),
+                    "owner_name": (row.get("Contact Name") or "").strip(),
+                    "owner_phone": (row.get("Phone Number") or "").strip(),
+                    "listing_url": (row.get("Url") or "").strip(),
+                    "square_feet": _safe_int(row.get("Sqft")),
+                    "source_platform": "hotpads",
+                    "listing_type": "rent",
+                })
+        return jsonify({"listings": listings, "total": len(listings)})
+    except Exception as e:
+        add_log(f"Error reading Hotpads CSV: {e}", "error")
+        return jsonify({"listings": [], "error": str(e)}), 500
+
+
+def _safe_int(val):
+    if val is None or val == "":
+        return None
+    try:
+        return int(float(str(val).replace(",", "").strip()))
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_float(val):
+    if val is None or val == "":
+        return None
+    try:
+        return float(str(val).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
 
 @app.route('/api/trigger-redfin', methods=['POST', 'GET'])
 def trigger_redfin():
@@ -509,11 +877,81 @@ def trigger_trulia():
 
 @app.route('/api/status-trulia', methods=['GET'])
 def get_trulia_status():
+    if request.args.get("reset") in ("1", "true", "yes"):
+        trulia_status["running"] = False
+        trulia_status["error"] = None
+        add_log("Trulia status reset via status-trulia?reset=1", "info")
     return jsonify({
         "status": "running" if trulia_status["running"] else "idle",
         "last_run": trulia_status["last_run"],
         "error": trulia_status["error"]
     })
+
+
+def _trulia_listing_from_db_row(row):
+    """Map trulia_listings row to same shape as Hotpads for frontend."""
+    def str_or_none(v):
+        return (v or "").strip() or None
+    return {
+        "address": str_or_none(row.get("address")),
+        "bedrooms": _safe_int(row.get("beds")),
+        "bathrooms": _safe_float(row.get("baths")),
+        "price": str_or_none(row.get("price")),
+        "owner_name": str_or_none(row.get("owner_name") or row.get("name") or row.get("contact_name")),
+        "owner_phone": str_or_none(row.get("phones") or row.get("phone_number")),
+        "listing_url": str_or_none(row.get("listing_link") or row.get("url")),
+        "square_feet": _safe_int(row.get("square_feet")),
+        "source_platform": "trulia",
+        "listing_type": "sale",
+    }
+
+
+@app.route('/api/trulia/last-result', methods=['GET'])
+def get_trulia_last_result():
+    """Return Trulia listings from Supabase trulia_listings (same pattern as Hotpads last-result)."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+        if url and key:
+            supabase = create_client(url, key)
+            r = supabase.table("trulia_listings").select(
+                "address,price,beds,baths,owner_name,phones,listing_link,square_feet"
+            ).order("id", desc=True).limit(500).execute()
+            if r.data:
+                listings = [_trulia_listing_from_db_row(row) for row in r.data]
+                return jsonify({"listings": listings, "total": len(listings)})
+    except Exception as e:
+        add_log(f"Trulia last-result from Supabase failed: {e}", "warning")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(base_dir, "Trulia_Scraper", "output", "Trulia_Data.csv")
+    if not os.path.isfile(csv_path):
+        return jsonify({"listings": [], "message": "No results yet. Run a Trulia scrape first."})
+    try:
+        import csv as csv_module
+        listings = []
+        with open(csv_path, "r", encoding="utf-8", newline="", errors="replace") as f:
+            reader = csv_module.DictReader(f)
+            for row in reader:
+                listings.append({
+                    "address": (row.get("Address") or "").strip(),
+                    "bedrooms": _safe_int(row.get("Bedrooms")),
+                    "bathrooms": _safe_float(row.get("Bathrooms")),
+                    "price": (row.get("Asking Price") or row.get("Price") or "").strip(),
+                    "owner_name": (row.get("Name") or row.get("Contact Name") or "").strip(),
+                    "owner_phone": (row.get("Phone Number") or "").strip(),
+                    "listing_url": (row.get("Url") or row.get("listing_link") or "").strip(),
+                    "square_feet": _safe_int(row.get("Sqft") or row.get("Square Feet")),
+                    "source_platform": "trulia",
+                    "listing_type": "sale",
+                })
+        return jsonify({"listings": listings, "total": len(listings)})
+    except Exception as e:
+        add_log(f"Error reading Trulia CSV: {e}", "error")
+        return jsonify({"listings": [], "error": str(e)}), 500
+
 
 @app.route('/api/test-search', methods=['GET'])
 def test_search():
@@ -528,13 +966,13 @@ def test_search():
 @app.route('/api/search-location', methods=['POST', 'GET', 'OPTIONS'])
 def search_location():
     """Search a platform for a location and return the actual listing URL."""
-    # Immediate log to verify endpoint is hit
+    # Immediate log to verify endpoint is hit (safe for Windows console)
     print("=" * 80)
     print(f"[SEARCH-LOCATION] Endpoint hit at {datetime.now().isoformat()}")
     print(f"[SEARCH-LOCATION] Method: {request.method}")
-    print(f"[SEARCH-LOCATION] Headers: {dict(request.headers)}")
+    print(f"[SEARCH-LOCATION] Headers: {_safe_console(dict(request.headers))}")
     print("=" * 80)
-    add_log(f"SEARCH-LOCATION endpoint hit: method={request.method}", "info")
+    add_log("SEARCH-LOCATION endpoint hit: method=" + str(request.method), "info")
     
     # Handle CORS preflight - MUST be first thing we do
     if request.method == 'OPTIONS':
@@ -551,23 +989,11 @@ def search_location():
     sys.stdout.flush()  # Force flush to ensure logs appear
     
     try:
-        try:
-            from utils.location_searcher import LocationSearcher
-        except Exception as import_error:
-            error_msg = f"Failed to import LocationSearcher: {str(import_error)}"
-            add_log(error_msg, "error")
-            response = jsonify({
-                "error": error_msg,
-                "error_type": "import_error"
-            })
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 500
-        
-        # Get platform and location from request
+        # Get platform and location from request first (safe for Windows console)
         try:
             print(f"[SEARCH-LOCATION] Request JSON: {request.is_json}")
-            print(f"[SEARCH-LOCATION] Request data: {request.json if request.is_json else 'Not JSON'}")
-            print(f"[SEARCH-LOCATION] Request args: {dict(request.args)}")
+            print(f"[SEARCH-LOCATION] Request data: {_safe_console(request.json if request.is_json else 'Not JSON')}")
+            print(f"[SEARCH-LOCATION] Request args: {_safe_console(dict(request.args))}")
             sys.stdout.flush()
             
             if request.is_json and request.json:
@@ -579,7 +1005,7 @@ def search_location():
                 location = request.args.get('location') or (request.form.get('location') if request.form else None)
                 property_type = request.args.get('property_type') or (request.form.get('property_type') if request.form else 'apartments')
             
-            print(f"[SEARCH-LOCATION] Parsed: platform={platform}, location={location}")
+            print(f"[SEARCH-LOCATION] Parsed: platform={_safe_console(platform)}, location={_safe_console(location)}")
             sys.stdout.flush()
         except Exception as e:
             add_log(f"Error parsing request: {e}", "error")
@@ -598,35 +1024,51 @@ def search_location():
             return response, 400
         
         try:
-            print(f"[SEARCH-LOCATION] Starting search for platform={platform}, location={location}")
+            print(f"[SEARCH-LOCATION] Starting search for platform={_safe_console(platform)}, location={_safe_console(location)}")
             sys.stdout.flush()
-            add_log(f"Starting location search: platform={platform}, location={location}", "info")
+            add_log(f"Starting location search: platform={_safe_console(platform)}, location={_safe_console(location)}", "info")
             
             # For platforms with heavy bot detection, inform user it may take longer
             if platform.lower() in ['trulia', 'redfin', 'apartments.com']:
-                add_log("⚠️ This platform has aggressive bot detection. Bypassing CAPTCHAs and anti-bot measures... This may take 30-90 seconds", "info")
+                add_log("This platform has aggressive bot detection. May take 30-90 seconds", "info")
             
-            # Run the location search with timeout protection
-            # Use threading to enforce a maximum timeout (90 seconds to stay under Gunicorn's 120s timeout)
             url = None
             error_occurred = None
+            search_timed_out = False
             
-            def run_search():
-                nonlocal url, error_occurred
+            # Hotpads: build URL inline (no LocationSearcher, no logging) to avoid any encoding issues
+            if platform and str(platform).strip().lower() == "hotpads":
                 try:
-                    # Pass property_type for Hotpads (other platforms will ignore it)
-                    url = LocationSearcher.search_platform(platform, location, property_type)
+                    url = _hotpads_url_inline(location, property_type or "apartments")
                 except Exception as e:
                     error_occurred = e
+            elif platform and str(platform).strip().lower() == "trulia":
+                try:
+                    url = _trulia_url_inline(location)
+                except Exception as e:
+                    error_occurred = e
+            else:
+                # Run the location search with timeout protection (browser-based platforms)
+                try:
+                    from utils.location_searcher import LocationSearcher
+                    def run_search():
+                        nonlocal url, error_occurred
+                        try:
+                            url = LocationSearcher.search_platform(platform, location, property_type)
+                        except Exception as e:
+                            error_occurred = e
+                    import threading
+                    search_thread = threading.Thread(target=run_search, daemon=True)
+                    search_thread.start()
+                    search_thread.join(timeout=90)
+                    search_timed_out = search_thread.is_alive()
+                except Exception as import_error:
+                    error_occurred = import_error
+                    search_timed_out = False
             
-            import threading
-            search_thread = threading.Thread(target=run_search, daemon=True)
-            search_thread.start()
-            search_thread.join(timeout=90)  # 90 second timeout (under Gunicorn's 120s)
-            
-            if search_thread.is_alive():
+            if search_timed_out:
                 # Thread is still running - it timed out
-                add_log(f"Location search timed out after 90 seconds for {platform}/{location}", "error")
+                add_log(f"Location search timed out after 90 seconds for {_safe_console(platform)}/{_safe_console(location)}", "error")
                 response = jsonify({
                     "error": "Location search timed out. The operation took too long. Please try again or use Browserless.io for better performance.",
                     "platform": platform,
@@ -637,13 +1079,16 @@ def search_location():
                 return response, 504
             
             if error_occurred:
-                # Selenium error occurred
-                error_msg = str(error_occurred)
+                # Selenium/encoding error occurred - sanitize for Windows console and JSON
+                try:
+                    error_msg = str(error_occurred).encode('ascii', 'replace').decode('ascii')
+                except Exception:
+                    error_msg = "An error occurred during location search"
                 add_log(f"Selenium error during location search: {error_msg}", "error")
-                add_log(f"Selenium traceback: {traceback.format_exc()}", "error")
+                add_log("Traceback: " + _safe_console(traceback.format_exc()), "error")
                 
                 response = jsonify({
-                    "error": f"Browser automation failed: {error_msg}. Please ensure Chrome/Chromium is available on the server or set BROWSERLESS_TOKEN.",
+                    "error": f"Location search failed: {error_msg}. For browser-based platforms ensure Chrome/Chromium is available or set BROWSERLESS_TOKEN.",
                     "platform": platform,
                     "location": location,
                     "error_type": "selenium_error"
@@ -652,7 +1097,7 @@ def search_location():
                 return response, 500
             
             if not url:
-                add_log(f"Could not find URL for {platform}/{location}", "warning")
+                add_log(f"Could not find URL for {_safe_console(platform)}/{_safe_console(location)}", "warning")
                 response = jsonify({
                     "error": f"Could not find listing URL for '{location}' on {platform}",
                     "platform": platform,
@@ -665,7 +1110,7 @@ def search_location():
             from utils.url_detector import URLDetector
             detected_platform, extracted_location = URLDetector.detect_and_extract(url)
             
-            add_log(f"Location search successful: {platform}/{location} -> {url}", "success")
+            add_log(f"Location search successful: {_safe_console(platform)}/{_safe_console(location)} -> {_safe_console(url)}", "success")
             response = jsonify({
                 "url": url,
                 "platform": detected_platform or platform,
@@ -675,12 +1120,16 @@ def search_location():
             response.headers.add('Access-Control-Allow-Origin', '*')
             return response
         except Exception as inner_error:
-            # Catch errors in the inner try block
+            # Catch errors in the inner try block - sanitize for encoding
             error_trace = traceback.format_exc()
             add_log(f"Error in location search: {inner_error}", "error")
             add_log(f"Traceback: {error_trace}", "error")
+            try:
+                err_text = str(inner_error).encode('ascii', 'replace').decode('ascii')
+            except Exception:
+                err_text = "Error searching location"
             response = jsonify({
-                "error": f"Error searching location: {str(inner_error)}",
+                "error": f"Error searching location: {err_text}",
                 "platform": platform if 'platform' in locals() else None,
                 "location": location if 'location' in locals() else None
             })
@@ -697,8 +1146,12 @@ def search_location():
             platform_val = platform if 'platform' in locals() else None
             location_val = location if 'location' in locals() else None
             
+            try:
+                outer_err_text = str(outer_error).encode('ascii', 'replace').decode('ascii')
+            except Exception:
+                outer_err_text = "Unexpected error"
             response = jsonify({
-                "error": f"Unexpected error: {str(outer_error)}",
+                "error": f"Unexpected error: {outer_err_text}",
                 "platform": platform_val,
                 "location": location_val,
                 "error_type": "unhandled_exception"
@@ -768,24 +1221,44 @@ def validate_url():
 @app.route('/api/trigger-from-url', methods=['POST', 'GET'])
 def trigger_from_url():
     """Trigger scraper from any URL - automatically detects platform and routes to appropriate scraper."""
-    # Get URL from request (POST body or GET query param)
-    if request.is_json and request.json:
-        url = request.json.get('url')
-    else:
-        url = request.args.get('url') or (request.form.get('url') if request.form else None)
-    
+    print("[BACKEND] trigger-from-url called", flush=True)
+    url = None
+    force = False
+    # Prefer query string so frontend ?url=...&force=1 always works
+    if request.args.get("url"):
+        url = request.args.get("url")
+        force = force or request.args.get("force") in ("1", "true", "yes")
+    # Else try POST body
+    if not url and request.method == "POST" and request.get_data():
+        try:
+            import json as _json
+            raw = request.get_data(as_text=True) or "{}"
+            data = _json.loads(raw) if isinstance(raw, str) else _json.loads(raw.decode("utf-8", errors="replace"))
+            if isinstance(data, dict):
+                url = data.get("url") or url
+                force = force or data.get("force") in (True, 1, "1", "true", "yes")
+        except Exception as e:
+            add_log(f"trigger-from-url: could not parse POST body: {e}", "warning")
+    if not url and request.is_json and request.json:
+        url = request.json.get("url")
+        force = force or request.json.get("force") in (True, 1, "1", "true", "yes")
     if not url:
+        url = request.form.get("url") if request.form else None
+        force = force or (request.form.get("force") in ("1", "true", "yes") if request.form else False)
+    if not url:
+        print("[BACKEND] trigger-from-url 400: URL parameter is required", flush=True)
         return jsonify({"error": "URL parameter is required"}), 400
-    
+    print(f"[BACKEND] trigger-from-url url={url[:80] if len(url) > 80 else url}", flush=True)
     # Validate URL format
     if not url.startswith(('http://', 'https://')):
+        print(f"[BACKEND] trigger-from-url 400: Invalid URL format: {url[:80]!r}", flush=True)
         return jsonify({"error": "Invalid URL format. URL must start with http:// or https://"}), 400
     
     # Detect platform and route
     platform, table_name, scraper_config, location = TableRouter.route_url(url)
     
     if not platform or not scraper_config:
-        # Unknown platform - return error (for now, generic scraper handler can be added later)
+        print(f"[BACKEND] trigger-from-url 400: Unknown platform for url={url[:80]!r}", flush=True)
         return jsonify({
             "error": "Unknown or unsupported platform",
             "url": url,
@@ -807,13 +1280,13 @@ def trigger_from_url():
     if not status_dict:
         return jsonify({"error": f"No status tracking for platform: {platform}"}), 500
     
-    # Check if scraper is already running
+    # Always clear "already running" and start (no 400 – avoids stuck state for any platform)
+    if platform == "hotpads":
+        force = True
     if status_dict["running"]:
-        return jsonify({
-            "error": f"Scraper for {platform} is already running",
-            "platform": platform,
-            "table": table_name
-        }), 400
+        status_dict["running"] = False
+        status_dict["error"] = None
+        add_log(f"Cleared running state for {platform}, starting new scrape.", "info")
     
     # Map platform to scraper name for logging (use capitalized names for consistency)
     scraper_name_map = {
@@ -844,6 +1317,7 @@ def trigger_from_url():
         base_dir = os.path.dirname(os.path.abspath(__file__))
         run_process_with_logging(cmd, scraper_dir, scraper_name, status_dict, env=env)
     
+    print(f"[BACKEND] >>> STARTING {scraper_name.upper()} SCRAPER (thread) <<<", flush=True)
     thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
@@ -1137,4 +1611,10 @@ if __name__ == '__main__':
     start_scheduler()
     
     port = int(os.environ.get('PORT', 8080))
+    this_file = os.path.abspath(__file__)
+    print("", flush=True)
+    print(">>> SCRAPER BACKEND - Requests to /api/* will log [BACKEND] lines below.", flush=True)
+    print(">>> Keep this terminal open when using Find Listings in the app.", flush=True)
+    print(f">>> Using: {this_file}", flush=True)
+    print("", flush=True)
     app.run(host='0.0.0.0', port=port, debug=False)

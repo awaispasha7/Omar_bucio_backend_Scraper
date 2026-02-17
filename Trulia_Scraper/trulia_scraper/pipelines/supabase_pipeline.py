@@ -97,18 +97,21 @@ class SupabasePipeline:
             
             # Parse beds and baths from "Beds / Baths" column
             beds_baths_str = self.clean_value(item_dict.get("Beds / Baths", ""))
-            beds, baths = self.parse_beds_baths(beds_baths_str) if beds_baths_str else (None, None)
+            beds_raw, baths_raw = self.parse_beds_baths(beds_baths_str) if beds_baths_str else (None, None)
+            beds = int(float(beds_raw)) if beds_raw is not None else None
+            baths = float(baths_raw) if baths_raw is not None else None
             
-            # Prepare data for Supabase trulia_listings table
+            # Prepare data for Supabase trulia_listings table (columns match public.trulia_listings)
             data = {
                 "listing_link": listing_link,
                 "address": address,
                 "price": self.clean_value(item_dict.get("Asking Price", "")),
                 "beds": beds,
                 "baths": baths,
-                "owner_name": self.clean_value(item_dict.get("Name", "")),  # Owner name from spider
+                # Owner/phone: set when spider extracts from detail page (Trulia often does not expose these)
+                "owner_name": self.clean_value(item_dict.get("Name", "")),
                 "phones": self.clean_value(item_dict.get("Phone Number", "")),
-                "emails": None,  # Not available from spider
+                "emails": None,  # Trulia does not expose owner email on listing pages
                 "mailing_address": None,  # Not available from spider
                 "square_feet": None,  # Will be updated later if available
                 "property_type": None,  # Not available from spider
@@ -129,21 +132,24 @@ class SupabasePipeline:
             self.uploaded_count += 1
             logger.info(f"[OK] Saved to Supabase: {address[:50]}... | Price: {data.get('price', 'N/A')} | Beds: {beds or 'N/A'} | Baths: {baths or 'N/A'}")
             
-            # AUTOMATIC ENRICHMENT DISABLED - User must click "Run Enrichment" button manually
-            # Enrichment Integration (COMMENTED OUT - manual only)
-            # if self.enrichment_manager:
-            #     try:
-            #         enrichment_data = {
-            #             "address": address,
-            #             "owner_name": data.get("owner_name"),
-            #             "owner_email": None,
-            #             "owner_phone": data.get("phones"),
-            #         }
-            #         address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Trulia")
-            #         if address_hash:
-            #             self.supabase.table(self.table_name).update({"address_hash": address_hash}).eq("listing_link", data.get("listing_link")).execute()
-            #     except Exception as e:
-            #         logger.error(f"[ERROR] ENRICHMENT ERROR: {e}")
+            # Queue for BatchData: fetch owner name, email, phone, mailing address via skip-trace API
+            if self.enrichment_manager:
+                try:
+                    enrichment_data = {
+                        "address": address,
+                        "owner_name": data.get("owner_name"),
+                        "owner_email": data.get("emails"),
+                        "owner_phone": data.get("phones"),
+                    }
+                    address_hash = self.enrichment_manager.process_listing(enrichment_data, listing_source="Trulia")
+                    if address_hash:
+                        self.supabase.table(self.table_name).update({
+                            "address_hash": address_hash,
+                            "enrichment_status": "never_checked",
+                        }).eq("listing_link", listing_link).execute()
+                        logger.info(f"[OK] Queued for BatchData: {address_hash[:8]}...")
+                except Exception as e:
+                    logger.error(f"[ERROR] Enrichment queue error: {e}")
             
         except Exception as e:
             self.error_count += 1
