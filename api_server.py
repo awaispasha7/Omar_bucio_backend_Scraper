@@ -78,12 +78,25 @@ from utils.table_router import TableRouter
 
 app = Flask(__name__)
 
-# CORS: Trulia & Hotpads scraper + dashboard routes only — allow production frontend and local dev
+# CORS: Trulia & Hotpads scraper + dashboard routes — allow production, Lovable preview, and local dev
 _FRONTEND_ORIGINS = [
     "https://www.brivano.io",
     "https://brivano.io",
     "http://localhost:5173",
+    "https://lovable.dev",
+    "https://www.lovable.dev",
 ]
+
+
+def _is_allowed_origin(origin):
+    if not origin:
+        return False
+    if origin in _FRONTEND_ORIGINS:
+        return True
+    # Lovable preview subdomains (e.g. https://xxx.lovableproject.com)
+    if origin.endswith(".lovableproject.com") and origin.startswith("https://"):
+        return True
+    return False
 _CORS_OPTS = {
     "methods": ["GET", "POST", "OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization"],
@@ -111,6 +124,17 @@ CORS(app, resources={
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
+
+
+@app.after_request
+def _cors_allow_lovable_after_request(response):
+    """Allow CORS for Lovable preview subdomains (*.lovableproject.com) and other allowed origins."""
+    if not request.path.startswith("/api/"):
+        return response
+    origin = request.headers.get("Origin")
+    if origin and _is_allowed_origin(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+    return response
 
 
 @app.before_request
@@ -506,7 +530,7 @@ def geocode_proxy():
     if request.method == 'OPTIONS':
         r = jsonify({})
         origin = request.headers.get("Origin", "")
-        if origin in _FRONTEND_ORIGINS:
+        if _is_allowed_origin(origin):
             r.headers.add('Access-Control-Allow-Origin', origin)
         r.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         r.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
@@ -523,14 +547,14 @@ def geocode_proxy():
             data = json.loads(resp.read().decode())
         response = jsonify(data)
         origin = request.headers.get("Origin", "")
-        if origin in _FRONTEND_ORIGINS:
+        if _is_allowed_origin(origin):
             response.headers.add('Access-Control-Allow-Origin', origin)
         return response
     except Exception as e:
         add_log(f"Geocode failed for q={q[:50]!r}: {e}", "warning")
         response = jsonify([])
         origin = request.headers.get("Origin", "")
-        if origin in _FRONTEND_ORIGINS:
+        if _is_allowed_origin(origin):
             response.headers.add('Access-Control-Allow-Origin', origin)
         return response
 
@@ -587,7 +611,7 @@ def skip_trace():
         r = jsonify({"ok": True})
         r.status_code = 200
         origin = request.headers.get("Origin", "")
-        if origin in _FRONTEND_ORIGINS:
+        if _is_allowed_origin(origin):
             r.headers.add('Access-Control-Allow-Origin', origin)
         r.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         r.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
@@ -609,7 +633,7 @@ def skip_trace():
         result = _parse_batchdata_to_skip_trace_result(raw, address_data)
         response = jsonify(result)
         origin = request.headers.get("Origin", "")
-        if origin in _FRONTEND_ORIGINS:
+        if _is_allowed_origin(origin):
             response.headers.add('Access-Control-Allow-Origin', origin)
         return response
     except Exception as e:
