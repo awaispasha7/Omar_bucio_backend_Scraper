@@ -118,7 +118,9 @@ _CORS_OPTS = {
     "allow_headers": ["Content-Type", "Authorization"],
 }
 # Trulia/Hotpads and scraper-dashboard routes: restrict origin to frontend deployments
+# /api/health: allow any origin so brivano.io and Lovable previews can reach the backend
 CORS(app, resources={
+    r"/api/health": {"origins": "*", "methods": ["GET", "OPTIONS"], "allow_headers": ["Content-Type"]},
     r"/api/geocode": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
     r"/api/skip-trace": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
     r"/api/search-location": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
