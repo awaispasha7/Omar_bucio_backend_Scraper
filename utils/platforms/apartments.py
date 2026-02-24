@@ -143,6 +143,10 @@ def search_apartments(location: str) -> Optional[str]:
         logger.warning(f"[Apartments] URL construction failed for: {location_clean}")
         return None
     
+    # Spider expects FRBO (For Rent By Owner) URL path
+    if "/for-rent-by-owner" not in constructed_url:
+        constructed_url = constructed_url.rstrip("/") + "/for-rent-by-owner/"
+    
     print(f"[Apartments] Constructed URL: {constructed_url}")
     logger.info(f"[Apartments] Constructed URL: {constructed_url}")
     

@@ -78,11 +78,14 @@ from utils.table_router import TableRouter
 
 app = Flask(__name__)
 
-# CORS: Trulia & Hotpads scraper + dashboard routes — allow production, Lovable preview, and local dev
+# CORS: Allow production, Lovable, other deployment hosts, and localhost (all ports)
 _FRONTEND_ORIGINS = [
     "https://www.brivano.io",
     "https://brivano.io",
     "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
     "https://lovable.dev",
     "https://www.lovable.dev",
 ]
@@ -93,8 +96,21 @@ def _is_allowed_origin(origin):
         return False
     if origin in _FRONTEND_ORIGINS:
         return True
+    # Localhost / 127.0.0.1 (any port) for local dev
+    if origin.startswith("http://localhost:") or origin.startswith("http://127.0.0.1:"):
+        return True
     # Lovable preview subdomains (e.g. https://xxx.lovableproject.com)
     if origin.endswith(".lovableproject.com") and origin.startswith("https://"):
+        return True
+    # Other deployment hosts (Vercel, Netlify, Render, etc.)
+    if origin.startswith("https://") and (
+        ".vercel.app" in origin
+        or ".netlify.app" in origin
+        or ".onrender.com" in origin
+        or ".railway.app" in origin
+        or ".lovable.dev" in origin
+        or "lovableproject.com" in origin
+    ):
         return True
     return False
 _CORS_OPTS = {
@@ -117,6 +133,16 @@ CORS(app, resources={
     r"/api/trigger-redfin": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
     r"/api/status-redfin": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
     r"/api/redfin/last-result": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/trigger-zillow-frbo": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/status-zillow-frbo": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/zillow-frbo/last-result": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/trigger-zillow-fsbo": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/status-zillow-fsbo": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/zillow-fsbo/last-result": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/status-fsbo": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/fsbo/last-result": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/status-apartments": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
+    r"/api/apartments/last-result": {**{"origins": _FRONTEND_ORIGINS}, **_CORS_OPTS},
     # All other /api/* routes (other scrapers): unchanged, allow all origins
     r"/api/*": {
         "origins": "*",
@@ -155,6 +181,7 @@ zillow_frbo_status = {"running": False, "last_run": None, "last_result": None, "
 hotpads_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 redfin_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 trulia_status = {"running": False, "last_run": None, "last_result": None, "error": None}
+fsbo_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 all_scrapers_status = {"running": False, "last_run": None, "finished_at": None, "last_result": None, "error": None, "current_scraper": None, "completed": []}
 enrichment_status = {"running": False, "last_run": None, "last_result": None, "error": None}
 
@@ -720,6 +747,10 @@ def trigger_zillow_fsbo():
 
 @app.route('/api/status-zillow-fsbo', methods=['GET'])
 def get_zillow_fsbo_status():
+    if request.args.get("reset") in ("1", "true", "yes"):
+        zillow_fsbo_status["running"] = False
+        zillow_fsbo_status["error"] = None
+        add_log("Zillow FSBO status reset via status-zillow-fsbo?reset=1", "info")
     return jsonify({
         "status": "running" if zillow_fsbo_status["running"] else "idle",
         "last_run": zillow_fsbo_status["last_run"],
@@ -728,6 +759,7 @@ def get_zillow_fsbo_status():
 
 @app.route('/api/trigger-zillow-frbo', methods=['POST', 'GET'])
 def trigger_zillow_frbo():
+    print("[BACKEND] Zillow FRBO trigger called", flush=True)
     if zillow_frbo_status["running"]:
          return jsonify({"error": "Zillow FRBO Scraper is already running"}), 400
          
@@ -744,15 +776,32 @@ def trigger_zillow_frbo():
     thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()
-    
+    print("[BACKEND] Zillow FRBO scraper started (running in background)", flush=True)
     return jsonify({"message": "Zillow FRBO scraper started"})
 
 @app.route('/api/status-zillow-frbo', methods=['GET'])
 def get_zillow_frbo_status():
+    if request.args.get("reset") in ("1", "true", "yes"):
+        print("[BACKEND] Zillow FRBO status reset", flush=True)
+        zillow_frbo_status["running"] = False
+        zillow_frbo_status["error"] = None
+        add_log("Zillow FRBO status reset via status-zillow-frbo?reset=1", "info")
     return jsonify({
         "status": "running" if zillow_frbo_status["running"] else "idle",
         "last_run": zillow_frbo_status["last_run"],
         "error": zillow_frbo_status["error"]
+    })
+
+@app.route('/api/status-fsbo', methods=['GET'])
+def get_fsbo_status():
+    if request.args.get("reset") in ("1", "true", "yes"):
+        fsbo_status["running"] = False
+        fsbo_status["error"] = None
+        add_log("FSBO status reset via status-fsbo?reset=1", "info")
+    return jsonify({
+        "status": "running" if fsbo_status["running"] else "idle",
+        "last_run": fsbo_status["last_run"],
+        "error": fsbo_status["error"]
     })
 
 @app.route('/api/trigger-hotpads', methods=['POST', 'GET'])
@@ -1060,6 +1109,205 @@ def get_trulia_last_result():
         return jsonify({"listings": [], "error": str(e)}), 500
 
 
+def _zillow_fsbo_listing_from_db_row(row):
+    """Map zillow_fsbo_listings row to same shape as Hotpads/Trulia for frontend."""
+    def str_or_none(v):
+        return (v or "").strip() or None
+    return {
+        "address": str_or_none(row.get("address")),
+        "bedrooms": _safe_int(row.get("bedrooms")),
+        "bathrooms": _safe_float(row.get("bathrooms")),
+        "price": str_or_none(row.get("price")),
+        "owner_name": str_or_none(row.get("owner_name")),
+        "owner_phone": str_or_none(row.get("phone_number")),
+        "listing_url": str_or_none(row.get("detail_url")),
+        "square_feet": None,
+        "source_platform": "zillow_fsbo",
+        "listing_type": "sale",
+    }
+
+
+@app.route('/api/zillow-fsbo/last-result', methods=['GET', 'OPTIONS'])
+def get_zillow_fsbo_last_result():
+    """Return Zillow FSBO listings from Supabase zillow_fsbo_listings (same pattern as Hotpads/Trulia last-result)."""
+    if request.method == 'OPTIONS':
+        resp = jsonify({})
+        resp.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin') or '*'
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return resp, 204
+    print("[BACKEND] Zillow FSBO last-result requested", flush=True)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+        if url and key:
+            supabase = create_client(url, key)
+            r = supabase.table("zillow_fsbo_listings").select(
+                "detail_url,address,bedrooms,bathrooms,price,owner_name,phone_number"
+            ).order("id", desc=True).limit(500).execute()
+            if r.data:
+                listings = [_zillow_fsbo_listing_from_db_row(row) for row in r.data]
+                return jsonify({"listings": listings, "total": len(listings)})
+    except Exception as e:
+        add_log(f"Zillow FSBO last-result from Supabase failed: {e}", "warning")
+    return jsonify({"listings": [], "message": "No Zillow FSBO results yet. Run a Zillow FSBO scrape first."})
+
+
+def _parse_beds_baths(beds_baths_str):
+    """Parse '3 bd · 2 ba' or '3 bed 2 bath' style string; return (bedrooms, bathrooms)."""
+    if not beds_baths_str or not isinstance(beds_baths_str, str):
+        return None, None
+    import re
+    numbers = re.findall(r"\d+(?:\.\d+)?", beds_baths_str.strip())
+    if len(numbers) >= 2:
+        return _safe_int(numbers[0]), _safe_float(numbers[1])
+    if len(numbers) == 1:
+        return _safe_int(numbers[0]), None
+    return None, None
+
+
+def _zillow_frbo_listing_from_db_row(row):
+    """Map zillow_frbo_listings row to same shape as Hotpads/Trulia for frontend."""
+    def str_or_none(v):
+        return (v or "").strip() or None
+    beds_baths = str_or_none(row.get("beds_baths"))
+    bedrooms, bathrooms = _parse_beds_baths(beds_baths)
+    return {
+        "address": str_or_none(row.get("address")),
+        "bedrooms": bedrooms,
+        "bathrooms": bathrooms,
+        "price": str_or_none(row.get("asking_price")),
+        "owner_name": str_or_none(row.get("name")),
+        "owner_phone": str_or_none(row.get("phone_number")),
+        "listing_url": str_or_none(row.get("url")),
+        "square_feet": None,
+        "source_platform": "zillow_frbo",
+        "listing_type": "rent",
+    }
+
+
+@app.route('/api/zillow-frbo/last-result', methods=['GET'])
+def get_zillow_frbo_last_result():
+    """Return Zillow FRBO listings from Supabase zillow_frbo_listings (same pattern as Hotpads/Trulia last-result)."""
+    print("[BACKEND] Zillow FRBO last-result requested", flush=True)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+        if url and key:
+            supabase = create_client(url, key)
+            r = supabase.table("zillow_frbo_listings").select(
+                "url,address,asking_price,beds_baths,name,phone_number"
+            ).order("id", desc=True).limit(500).execute()
+            if r.data:
+                listings = [_zillow_frbo_listing_from_db_row(row) for row in r.data]
+                return jsonify({"listings": listings, "total": len(listings)})
+    except Exception as e:
+        add_log(f"Zillow FRBO last-result from Supabase failed: {e}", "warning")
+    return jsonify({"listings": [], "message": "No Zillow FRBO results yet. Run a Zillow FRBO scrape first."})
+
+
+def _fsbo_listing_from_db_row(row):
+    """Map fsbo_listings row to same shape as Hotpads/Trulia for frontend."""
+    def str_or_none(v):
+        return (v or "").strip() or None
+    return {
+        "address": str_or_none(row.get("address")),
+        "bedrooms": _safe_int(row.get("bedrooms")),
+        "bathrooms": _safe_float(row.get("bathrooms")),
+        "price": str_or_none(row.get("price")),
+        "owner_name": str_or_none(row.get("owner_name")),
+        "owner_phone": str_or_none(row.get("owner_phone")),
+        "owner_email": str_or_none(row.get("owner_email")),
+        "listing_url": str_or_none(row.get("listing_url")),
+        "square_feet": _safe_int(row.get("square_feet")),
+        "source_platform": "fsbo",
+        "listing_type": "sale",
+    }
+
+
+@app.route('/api/fsbo/last-result', methods=['GET', 'OPTIONS'])
+def get_fsbo_last_result():
+    """Return FSBO.com listings from Supabase fsbo_listings (same pattern as other scrapers)."""
+    if request.method == 'OPTIONS':
+        resp = jsonify({})
+        resp.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin') or '*'
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return resp, 204
+    print("[BACKEND] FSBO last-result requested", flush=True)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+        if url and key:
+            supabase = create_client(url, key)
+            r = supabase.table("fsbo_listings").select(
+                "listing_url,address,price,bedrooms,bathrooms,square_feet,owner_name,owner_email,owner_phone"
+            ).order("id", desc=True).limit(500).execute()
+            if r.data:
+                listings = [_fsbo_listing_from_db_row(row) for row in r.data]
+                return jsonify({"listings": listings, "total": len(listings)})
+    except Exception as e:
+        add_log(f"FSBO last-result from Supabase failed: {e}", "warning")
+    return jsonify({"listings": [], "message": "No FSBO.com results yet. Run an FSBO scrape first."})
+
+
+def _apartments_listing_from_db_row(row):
+    """Map apartments_listings row to same shape as Hotpads/FSBO for frontend."""
+    def str_or_none(v):
+        return (v or "").strip() or None
+    return {
+        "address": str_or_none(row.get("address")),
+        "bedrooms": _safe_int(row.get("bedrooms")),
+        "bathrooms": _safe_float(row.get("bathrooms")),
+        "price": str_or_none(row.get("price")),
+        "owner_name": str_or_none(row.get("owner_name")),
+        "owner_phone": str_or_none(row.get("owner_phone")),
+        "owner_email": str_or_none(row.get("owner_email")),
+        "listing_url": str_or_none(row.get("listing_url")),
+        "square_feet": _safe_int(row.get("square_feet")),
+        "source_platform": "apartments",
+        "listing_type": "rent",
+    }
+
+
+@app.route('/api/apartments/last-result', methods=['GET', 'OPTIONS'])
+def get_apartments_last_result():
+    """Return Apartments.com listings from Supabase apartments_listings (same pattern as other scrapers)."""
+    if request.method == 'OPTIONS':
+        resp = jsonify({})
+        resp.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin') or '*'
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return resp, 204
+    print("[BACKEND] Apartments last-result requested", flush=True)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+        if url and key:
+            supabase = create_client(url, key)
+            r = supabase.table("apartments_listings").select(
+                "listing_url,address,price,bedrooms,bathrooms,square_feet,owner_name,owner_email,owner_phone"
+            ).order("id", desc=True).limit(500).execute()
+            if r.data:
+                listings = [_apartments_listing_from_db_row(row) for row in r.data]
+                return jsonify({"listings": listings, "total": len(listings)})
+    except Exception as e:
+        add_log(f"Apartments last-result from Supabase failed: {e}", "warning")
+    return jsonify({"listings": [], "message": "No Apartments.com results yet. Run an Apartments scrape first."})
+
+
 @app.route('/api/test-search', methods=['GET'])
 def test_search():
     """Test endpoint to verify server is responding"""
@@ -1152,6 +1400,12 @@ def search_location():
             elif platform and str(platform).strip().lower() == "trulia":
                 try:
                     url = _trulia_url_inline(location)
+                except Exception as e:
+                    error_occurred = e
+            elif platform and str(platform).strip().lower() in ("apartments", "apartments.com"):
+                try:
+                    from utils.platforms.apartments import search_apartments
+                    url = search_apartments(location)
                 except Exception as e:
                     error_occurred = e
             else:
@@ -1380,7 +1634,7 @@ def trigger_from_url():
         'trulia': trulia_status,
         'zillow_fsbo': zillow_fsbo_status,
         'zillow_frbo': zillow_frbo_status,
-        'fsbo': scraper_status,
+        'fsbo': fsbo_status,
     }
     
     status_dict = status_dict_map.get(platform)
@@ -1463,7 +1717,7 @@ def get_all_status():
             "finished_at": all_scrapers_status["finished_at"],
             "current_scraper": all_scrapers_status["current_scraper"]
         },
-        "fsbo": { "status": "running" if scraper_status["running"] else "idle", "last_run": scraper_status["last_run"], "last_result": scraper_status["last_result"] },
+        "fsbo": { "status": "running" if fsbo_status["running"] else "idle", "last_run": fsbo_status["last_run"], "last_result": fsbo_status["last_result"] },
         "apartments": { "status": "running" if apartments_scraper_status["running"] else "idle", "last_run": apartments_scraper_status["last_run"], "last_result": apartments_scraper_status["last_result"] },
         "zillow_fsbo": { "status": "running" if zillow_fsbo_status["running"] else "idle", "last_run": zillow_fsbo_status["last_run"], "last_result": zillow_fsbo_status["last_result"] },
         "zillow_frbo": { "status": "running" if zillow_frbo_status["running"] else "idle", "last_run": zillow_frbo_status["last_run"], "last_result": zillow_frbo_status["last_result"] },
@@ -1544,8 +1798,8 @@ def stop_scraper():
     # Reset status dictionaries even if process handle was missing
     status_updated = False
     if id == "fsbo":
-        if scraper_status["running"]: status_updated = True
-        scraper_status["running"] = False
+        if fsbo_status["running"]: status_updated = True
+        fsbo_status["running"] = False
     elif id == "apartments":
         if apartments_scraper_status["running"]: status_updated = True
         apartments_scraper_status["running"] = False
@@ -1598,6 +1852,7 @@ def stop_all():
     apartments_scraper_status["running"] = False
     zillow_fsbo_status["running"] = False
     zillow_frbo_status["running"] = False
+    fsbo_status["running"] = False
     hotpads_status["running"] = False
     redfin_status["running"] = False
     trulia_status["running"] = False
@@ -1723,5 +1978,7 @@ if __name__ == '__main__':
     print(">>> SCRAPER BACKEND - Requests to /api/* will log [BACKEND] lines below.", flush=True)
     print(">>> Keep this terminal open when using Find Listings in the app.", flush=True)
     print(f">>> Using: {this_file}", flush=True)
+    if any(r.rule == '/api/zillow-fsbo/last-result' for r in app.url_map.iter_rules()):
+        print(">>> /api/zillow-fsbo/last-result is registered.", flush=True)
     print("", flush=True)
     app.run(host='0.0.0.0', port=port, debug=False)

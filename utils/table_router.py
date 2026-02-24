@@ -13,13 +13,13 @@ class TableRouter:
     
     # Platform to table mapping
     PLATFORM_TO_TABLE = {
-        'apartments.com': 'apartments_frbo',
+        'apartments.com': 'apartments_listings',
         'hotpads': 'hotpads_listings',
         'redfin': 'redfin_listings',
         'trulia': 'trulia_listings',
         'zillow_fsbo': 'zillow_fsbo_listings',
         'zillow_frbo': 'zillow_frbo_listings',
-        'fsbo': 'listings',
+        'fsbo': 'fsbo_listings',
     }
     
     # Platform to scraper configuration

@@ -193,7 +193,7 @@ class SupabasePipeline:
     
     def __init__(self):
         self.enabled = False
-        self.table_name = "apartments_frbo"
+        self.table_name = "apartments_listings"
         self.supabase_client = None
         self.enrichment_manager = None
         self.upload_count = 0
@@ -310,35 +310,38 @@ class SupabasePipeline:
             self.enabled = False
     
     def process_item(self, item, spider):
-        """Upload item to Supabase."""
+        """Upload item to Supabase (apartments_listings table, same shape as other scrapers)."""
         if not self.enabled or not self.supabase_client:
             return item
         
         try:
-            # Convert item to dict
-            item_dict = {}
-            fieldnames = [
+            # Map spider fields to apartments_listings columns (owner_name, owner_email, owner_phone, etc.)
+            def _clean(v):
+                if v is None: return None
+                s = str(v).strip() if v else ""
+                return s if s else None
+            
+            raw = {k: item.get(k, '') for k in [
                 "listing_url", "title", "price", "beds", "baths", "sqft",
                 "owner_name", "owner_email", "phone_numbers", "full_address",
                 "street", "city", "state", "zip_code", "neighborhood", "description"
-            ]
+            ]}
             
-            for field in fieldnames:
-                value = item.get(field, '')
-                # Convert empty strings to None for better database handling
-                item_dict[field] = value.strip() if value and str(value).strip() else None
-            
-            # Generate address_hash for enrichment tracking
-            # This is required even if enrichment is disabled
-            import hashlib
-            full_address = item_dict.get("full_address")
-            if full_address:
-                # Normalize address and generate hash (same as EnrichmentManager)
-                normalized_address = full_address.strip().lower()
-                address_hash = hashlib.md5(normalized_address.encode()).hexdigest()
-                item_dict["address_hash"] = address_hash
-            else:
-                item_dict["address_hash"] = None
+            item_dict = {
+                "listing_url": _clean(raw.get("listing_url")),
+                "address": _clean(raw.get("full_address")),
+                "price": _clean(raw.get("price")),
+                "bedrooms": _clean(raw.get("beds")),
+                "bathrooms": _clean(raw.get("baths")),
+                "square_feet": _clean(raw.get("sqft")),
+                "owner_name": _clean(raw.get("owner_name")),
+                "owner_email": _clean(raw.get("owner_email")),
+                "owner_phone": _clean(raw.get("phone_numbers")),
+                "title": _clean(raw.get("title")),
+                "neighborhood": _clean(raw.get("neighborhood")),
+                "description": _clean(raw.get("description")),
+            }
+            item_dict = {k: v for k, v in item_dict.items() if v is not None or k == "listing_url"}
             
             # Add to batch
             self.batch.append(item_dict)

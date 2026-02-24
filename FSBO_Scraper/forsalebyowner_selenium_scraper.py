@@ -316,6 +316,53 @@ class ForSaleByOwnerSeleniumScraper:
         except Exception as e:
             logger.error(f"Error scrolling page: {e}")
     
+    def _get_listing_urls_from_page(self) -> set:
+        """
+        Collect all listing detail URLs from the current page using multiple selectors.
+        Handles different FSBO.com markup (e.g. /listing/ in path or full URL).
+        Returns a set of absolute listing URLs (no duplicates).
+        """
+        urls = set()
+        try:
+            # 1) Primary: links whose href contains /listing/
+            for sel in ["a[href*='/listing/']", "a[href*='listing']"]:
+                for el in self.driver.find_elements(By.CSS_SELECTOR, sel):
+                    try:
+                        href = el.get_attribute("href")
+                        if href and "/listing/" in href and self._is_listing_detail_url(href):
+                            urls.add(href.strip())
+                    except Exception:
+                        continue
+            # 2) Fallback: any <a> with href that looks like a listing detail page
+            for el in self.driver.find_elements(By.TAG_NAME, "a"):
+                try:
+                    href = el.get_attribute("href")
+                    if not href:
+                        continue
+                    href = href.strip()
+                    if ("forsalebyowner" in href.lower() or href.startswith("/")) and "/listing/" in href:
+                        if href.startswith("/"):
+                            href = "https://www.forsalebyowner.com" + href
+                        if self._is_listing_detail_url(href):
+                            urls.add(href)
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"Error in _get_listing_urls_from_page: {e}")
+        return urls
+    
+    @staticmethod
+    def _is_listing_detail_url(href: str) -> bool:
+        """True if href looks like a single listing page, not a search or list page."""
+        if not href or "/listing/" not in href:
+            return False
+        # Exclude search/list pages (e.g. .../search/list/... or .../listing?...
+        if "/search/" in href or "list/" in href.split("/listing/")[0]:
+            return False
+        # Listing detail has path like /listing/slug or /listing/slug/id
+        after = href.split("/listing/", 1)[-1].strip("/").split("?")[0]
+        return len(after) > 0
+    
     def send_listing_to_supabase(self, listing_data: Dict) -> bool:
         """
         Send a single listing directly to Supabase.
@@ -375,62 +422,33 @@ class ForSaleByOwnerSeleniumScraper:
             # This ensures 'id' is NEVER included, preventing primary key conflicts
             final_data = {k: v for k, v in clean_data.items() if k not in ['id', 'created_at', 'updated_at']}
             
-            # Strategy: Check first, then update or insert
-            # This avoids sequence sync issues by explicitly checking for existing records
-            existing_id = None
+            # Build row for fsbo_listings table (owner_email, owner_phone as single text like other scrapers)
+            owner_emails_list = listing_data.get("owner_emails") or []
+            owner_phones_list = listing_data.get("owner_phones") or []
+            fsbo_row = {
+                "listing_url": listing_link,
+                "address": clean_data.get("address"),
+                "price": clean_data.get("price"),
+                "bedrooms": clean_data.get("beds"),
+                "bathrooms": clean_data.get("baths"),
+                "square_feet": clean_data.get("square_feet"),
+                "owner_name": clean_data.get("owner_name"),
+                "owner_email": owner_emails_list[0] if isinstance(owner_emails_list, list) and len(owner_emails_list) > 0 else None,
+                "owner_phone": owner_phones_list[0] if isinstance(owner_phones_list, list) and len(owner_phones_list) > 0 else None,
+                "time_of_post": clean_data.get("time_of_post"),
+            }
+            fsbo_row = {k: v for k, v in fsbo_row.items() if v is not None or k == "listing_url"}
+
+            # Upsert into fsbo_listings (on_conflict listing_url)
             try:
-                existing_response = self.supabase.table("listings").select("id").eq("listing_link", listing_link).execute()
-                if existing_response and existing_response.data and len(existing_response.data) > 0:
-                    existing_id = existing_response.data[0].get("id")
-            except Exception as check_error:
-                logger.warning(f"Error checking existing listing: {check_error}. Will attempt to insert/update anyway.")
-                existing_id = None
-            
-            try:
-                if existing_id:
-                    # Update existing listing
-                    response = self.supabase.table("listings").update(final_data).eq("id", existing_id).execute()
-                    if response and response.data:
-                        logger.info(f"Updated in Supabase: {listing_data.get('address', 'N/A')[:50]}")
-                        return True
-                    else:
-                        logger.error(f"Failed to update in Supabase: {listing_data.get('address', 'N/A')[:50]}")
-                        return False
-                else:
-                    # Try to insert new listing
-                    # If INSERT fails due to sequence sync issue (duplicate key on id), 
-                    # re-check by listing_link in case record exists but check missed it
-                    try:
-                        response = self.supabase.table("listings").insert(final_data).execute()
-                        if response and response.data:
-                            logger.info(f"Saved to Supabase: {listing_data.get('address', 'N/A')[:50]}")
-                            return True
-                        else:
-                            logger.error(f"Failed to insert in Supabase: {listing_data.get('address', 'N/A')[:50]}")
-                            return False
-                    except Exception as insert_error:
-                        error_msg = str(insert_error)
-                        # If INSERT fails with duplicate key on ID (sequence sync issue), 
-                        # check again by listing_link - maybe the record exists after all
-                        if 'duplicate key' in error_msg.lower() and 'listings_pkey' in error_msg:
-                            logger.warning(f"Insert failed due to sequence sync issue, re-checking by listing_link...")
-                            try:
-                                recheck_response = self.supabase.table("listings").select("id").eq("listing_link", listing_link).execute()
-                                if recheck_response and recheck_response.data and len(recheck_response.data) > 0:
-                                    # Found it! Update instead
-                                    existing_id = recheck_response.data[0].get("id")
-                                    response = self.supabase.table("listings").update(final_data).eq("id", existing_id).execute()
-                                    if response and response.data:
-                                        logger.info(f"Updated in Supabase (after sequence error): {listing_data.get('address', 'N/A')[:50]}")
-                                        return True
-                            except Exception as recheck_error:
-                                logger.error(f"Re-check after sequence error also failed: {recheck_error}")
-                        
-                        logger.error(f"Error inserting listing in Supabase: {insert_error}")
-                        logger.error(f"NOTE: Database sequence may be out of sync. Consider running: SELECT setval('listings_id_seq', (SELECT MAX(id) FROM listings));")
-                        return False
+                response = self.supabase.table("fsbo_listings").upsert(fsbo_row, on_conflict="listing_url").execute()
+                if response and response.data:
+                    logger.info(f"Saved to Supabase fsbo_listings: {listing_data.get('address', 'N/A')[:50]}")
+                    return True
+                logger.error(f"Failed to upsert in Supabase fsbo_listings: {listing_data.get('address', 'N/A')[:50]}")
+                return False
             except Exception as db_error:
-                logger.error(f"Error saving listing in Supabase: {db_error}")
+                logger.error(f"Error saving listing to fsbo_listings: {db_error}")
                 return False
                 
         except Exception as e:
@@ -510,6 +528,17 @@ class ForSaleByOwnerSeleniumScraper:
                 self.scroll_page()
                 time.sleep(2)
             
+            # Wait for at least one listing link to appear (site may render list after count)
+            wait_for_links_sec = 20
+            for _ in range(wait_for_links_sec):
+                urls = self._get_listing_urls_from_page()
+                if urls:
+                    logger.info(f"Listing links detected: {len(urls)} (wait succeeded)")
+                    break
+                time.sleep(1)
+            else:
+                logger.warning("No listing links found after %ds wait; continuing anyway.", wait_for_links_sec)
+            
             # Detect total results count dynamically
             detected_target = self.extract_total_results_count()
             expected_count = detected_target if detected_target else 132 # Fallback to 132 if detection fails
@@ -522,16 +551,8 @@ class ForSaleByOwnerSeleniumScraper:
             
             for click_attempt in range(max_clicks):
                 try:
-                    # Count current UNIQUE links before clicking
-                    all_links = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='/listing/']")
-                    unique_hrefs = set()
-                    for link in all_links:
-                        try:
-                            href = link.get_attribute('href')
-                            if href:
-                                unique_hrefs.add(href)
-                        except:
-                            continue
+                    # Count current UNIQUE links before clicking (multi-selector)
+                    unique_hrefs = self._get_listing_urls_from_page()
                     current_links = len(unique_hrefs)
                     logger.info(f"Current UNIQUE listing links found: {current_links} (Expected: {expected_count})")
 
@@ -630,15 +651,7 @@ class ForSaleByOwnerSeleniumScraper:
                             time.sleep(2)
                             
                             # Check if new listings loaded
-                            new_all_links = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='/listing/']")
-                            new_unique_hrefs = set()
-                            for link in new_all_links:
-                                try:
-                                    href = link.get_attribute('href')
-                                    if href:
-                                        new_unique_hrefs.add(href)
-                                except:
-                                    continue
+                            new_unique_hrefs = self._get_listing_urls_from_page()
                             new_links = len(new_unique_hrefs)
                             
                             if new_links > current_links:
@@ -670,17 +683,10 @@ class ForSaleByOwnerSeleniumScraper:
                         time.sleep(3)
                         
                         # Check if scrolling loaded more content
-                        final_links = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='/listing/']")
-                        final_unique = set()
-                        for link in final_links:
-                            try:
-                                href = link.get_attribute('href')
-                                if href:
-                                    final_unique.add(href)
-                            except:
-                                continue
+                        final_unique = self._get_listing_urls_from_page()
                         if len(final_unique) > current_links:
                             logger.info(f"Scrolling loaded more listings: {len(final_unique)}")
+                            current_links = len(final_unique)
                         else:
                             logger.warning("No more listings found after scrolling. Stopping.")
                             break
@@ -706,15 +712,7 @@ class ForSaleByOwnerSeleniumScraper:
             final_unique_hrefs = set()
             
             for attempt in range(max_attempts):
-                all_final_links = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='/listing/']")
-                for link in all_final_links:
-                    try:
-                        href = link.get_attribute('href')
-                        if href and '/listing/' in href:
-                            final_unique_hrefs.add(href)
-                    except:
-                        continue
-                
+                final_unique_hrefs = self._get_listing_urls_from_page()
                 final_links = len(final_unique_hrefs)
                 logger.info(f"Attempt {attempt + 1}: Found {final_links} unique listing links (Expected: {expected_count})")
                 
@@ -747,21 +745,8 @@ class ForSaleByOwnerSeleniumScraper:
                 logger.info(f"Successfully found all {expected_count} listings!")
             
             # NEW APPROACH: Collect ALL unique listing URLs first, then process each one individually
-            # This avoids stale element issues by finding elements fresh for each URL
             logger.info("Collecting ALL unique listing URLs...")
-            all_listing_links = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='/listing/']")
-            logger.info(f"Found {len(all_listing_links)} total listing link elements")
-            
-            # Collect unique URLs
-            unique_urls = set()
-            for link in all_listing_links:
-                try:
-                    href = link.get_attribute('href')
-                    if href and '/listing/' in href:
-                        unique_urls.add(href)
-                except:
-                    continue
-            
+            unique_urls = self._get_listing_urls_from_page()
             logger.info(f"Found {len(unique_urls)} unique listing URLs (Expected: {expected_count})")
             
             if len(unique_urls) < expected_count:
@@ -769,6 +754,13 @@ class ForSaleByOwnerSeleniumScraper:
             
             if not unique_urls:
                 logger.error("No listing URLs found!")
+                try:
+                    debug_path = Path(__file__).resolve().parent / "debug_page_source.html"
+                    with open(debug_path, "w", encoding="utf-8") as f:
+                        f.write(self.driver.page_source)
+                    logger.info("Saved page HTML to %s for inspection.", debug_path)
+                except Exception as e:
+                    logger.warning("Could not save debug page source: %s", e)
                 return []
             
             # Process each URL individually - this avoids stale element issues
@@ -800,7 +792,7 @@ class ForSaleByOwnerSeleniumScraper:
                         # Check Supabase if local check didn't catch it
                         if self.supabase:
                             try:
-                                response = self.supabase.table("listings").select("listing_link").eq("listing_link", listing_url).execute()
+                                response = self.supabase.table("fsbo_listings").select("listing_url").eq("listing_url", listing_url).execute()
                                 if response.data:
                                     skipped_count += 1
                                     if skipped_count % 20 == 0:

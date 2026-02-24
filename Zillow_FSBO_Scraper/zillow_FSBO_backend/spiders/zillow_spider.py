@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import scrapy
 from pathlib import Path
 from supabase import create_client, Client
@@ -171,36 +172,52 @@ class ZillowSpiderSpider(scrapy.Spider):
             
             if home_detail:
                 home_data = json.loads(home_detail)
-                detail_key = list(home_data.keys())[0]
-                home = home_data.get(detail_key, {}).get('property', '')
+                detail_key = list(home_data.keys())[0] if home_data else None
+                home = home_data.get(detail_key, {}).get('property', {}) if detail_key else {}
             else:
                 home = detail.get('initialReduxState', {}).get('gdp', {}).get('building', {})
+            if not isinstance(home, dict):
+                home = {}
             
             detail1 = json_data.get('props', {}).get('pageProps', {}).get('componentProps', {})
             zpid = (detail1.get('initialReduxState', {}).get('gdp', {}).get('building', {}).get('zpid', ''))
             if not zpid:
                 zpid = detail1.get('zpid', '')
             
-            # Extract address with improved error handling
-            try:
-                raw_address = "".join([text.strip() for text in response.xpath('//*[@data-test-id="bdp-building-address"]//text() |//div[contains(@class,"styles__AddressWrapper")]/h1//text()').getall()]).strip()
-                # Normalize whitespace (replace multiple spaces with single space)
-                address = " ".join(raw_address.split())
-                
-                # Removed Illinois-only filter to support any location
-                # (Previously filtered for IL only)
-                
-                item["Address"] = address
-            except Exception as e:
-                self.logger.warning(f"Error extracting primary address: {e}")
+            # Extract address: 1) from embedded JSON (most reliable), 2) HTML, 3) detail URL slug
+            address = ""
+            # 1) From home object (same as Zillow FRBO - streetAddress, city, state, zipcode)
+            if isinstance(home, dict):
+                street = (home.get("streetAddress") or home.get("address") or "").strip()
+                city = (home.get("city") or "").strip()
+                state = (home.get("state") or "").strip()
+                zipcode = (home.get("zipcode") or home.get("zipCode") or "").strip()
+                if street and city and state:
+                    address = f"{street}, {city}, {state} {zipcode}".strip()
+                elif street:
+                    address = f"{street}, {city} {state} {zipcode}".strip()
+                elif home.get("address"):
+                    address = (home.get("address") or "").strip()
+            # 2) Fallback: HTML selectors (Zillow may change these)
+            if not address:
+                try:
+                    raw_address = "".join([text.strip() for text in response.xpath('//*[@data-test-id="bdp-building-address"]//text() | //div[contains(@class,"styles__AddressWrapper")]/h1//text() | //h1[contains(@class,"address")]//text()').getall()]).strip()
+                    address = " ".join(raw_address.split()) if raw_address else ""
+                except Exception as e:
+                    self.logger.debug(f"HTML address extraction: {e}")
+            if not address:
                 try:
                     raw_address = "".join([text.strip() for text in response.xpath('//div[contains(@class,"styles__AddressWrapper")]/h1//text()').getall()]).strip()
-                    address = " ".join(raw_address.split())
-                    # Removed Illinois-only filter to support any location
-                    item["Address"] = address
-                except Exception as e2:
-                    self.logger.warning(f"Error extracting fallback address: {e2}")
-                    item["Address"] = ""
+                    address = " ".join(raw_address.split()) if raw_address else ""
+                except Exception:
+                    pass
+            # 3) Fallback: parse address from detail URL (e.g. .../homedetails/623-Russell-Ave-N-Minneapolis-MN-55411/1887741_zpid/)
+            if not address and "/homedetails/" in response.url:
+                match = re.search(r"/homedetails/([^/]+)/\d+_zpid", response.url)
+                if match:
+                    slug = match.group(1)
+                    address = slug.replace("-", " ").strip()
+            item["Address"] = address or ""
 
             item['Bedrooms'] = home.get('bedrooms', '')
             item['Bathrooms'] = home.get('bathrooms', '')
