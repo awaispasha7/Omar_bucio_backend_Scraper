@@ -505,10 +505,10 @@ class ApartmentsFrboSpider(scrapy.Spider):
             existing_urls = set()
             if self.supabase and normalized_urls:
                 try:
-                    # Apartments uses 'apartments_frbo' table in Supabase
+                    # Apartments uses 'apartments_listings' table in Supabase
                     supabase_resp = (
                         self.supabase
-                        .table("apartments_frbo")
+                        .table("apartments_listings")
                         .select("listing_url")
                         .in_("listing_url", normalized_urls)
                         .execute()

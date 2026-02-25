@@ -1283,7 +1283,7 @@ def _apartments_listing_from_db_row(row):
 
 @app.route('/api/apartments/last-result', methods=['GET', 'OPTIONS'])
 def get_apartments_last_result():
-    """Return Apartments.com listings from Supabase apartments_listings (same pattern as other scrapers)."""
+    """Return Apartments.com listings from Supabase apartments_listings."""
     if request.method == 'OPTIONS':
         resp = jsonify({})
         resp.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin') or '*'
@@ -1300,7 +1300,7 @@ def get_apartments_last_result():
         if url and key:
             supabase = create_client(url, key)
             r = supabase.table("apartments_listings").select(
-                "listing_url,address,price,bedrooms,bathrooms,square_feet,owner_name,owner_email,owner_phone"
+                "listing_url,address,price,bedrooms,bathrooms,square_feet,owner_name,owner_email,owner_phone,title,neighborhood,description"
             ).order("id", desc=True).limit(500).execute()
             if r.data:
                 listings = [_apartments_listing_from_db_row(row) for row in r.data]

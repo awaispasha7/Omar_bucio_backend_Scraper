@@ -310,12 +310,12 @@ class SupabasePipeline:
             self.enabled = False
     
     def process_item(self, item, spider):
-        """Upload item to Supabase (apartments_listings table, same shape as other scrapers)."""
+        """Upload item to Supabase apartments_listings table (address, bedrooms, bathrooms, square_feet, owner_phone)."""
         if not self.enabled or not self.supabase_client:
             return item
         
         try:
-            # Map spider fields to apartments_listings columns (owner_name, owner_email, owner_phone, etc.)
+            # Map spider fields to apartments_listings columns
             def _clean(v):
                 if v is None: return None
                 s = str(v).strip() if v else ""
