@@ -976,14 +976,26 @@ def _redfin_listing_from_db_row(row):
     """Map redfin_listings row to same shape as Hotpads/Trulia for frontend."""
     def str_or_none(v):
         return (v or "").strip() or None
+    raw_address = str_or_none(row.get("address"))
+    listing_url = str_or_none(row.get("listing_link") or row.get("url"))
+    # If address looks like URL slug (e.g. "home, 4323-W-Peterson-Ave-60648, Chicago"), parse from URL
+    if raw_address and "home," in raw_address.lower() and listing_url:
+        try:
+            from utils.address_utils import redfin_address_from_url
+            if listing_url:
+                parsed = redfin_address_from_url(listing_url)
+                if parsed:
+                    raw_address = parsed
+        except Exception:
+            pass
     return {
-        "address": str_or_none(row.get("address")),
+        "address": raw_address,
         "bedrooms": _safe_int(row.get("beds")),
         "bathrooms": _safe_float(row.get("baths")),
         "price": str_or_none(row.get("price")),
         "owner_name": str_or_none(row.get("owner_name") or row.get("name")),
         "owner_phone": str_or_none(row.get("phones") or row.get("phone_number")),
-        "listing_url": str_or_none(row.get("listing_link") or row.get("url")),
+        "listing_url": listing_url,
         "square_feet": _safe_int(row.get("square_feet")),
         "source_platform": "redfin",
         "listing_type": "sale",

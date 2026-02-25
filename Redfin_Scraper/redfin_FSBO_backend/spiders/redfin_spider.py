@@ -382,10 +382,16 @@ class RedfinSpiderSpider(scrapy.Spider):
                     address = address.strip()
             
             if not address:
-                # Extract from URL as fallback
-                url_parts = response.url.split('/')
-                if len(url_parts) >= 4:
-                    address = f"{url_parts[-2]}, {url_parts[-3]}, {url_parts[-4]}"
+                # Fallback: parse Redfin URL to readable address (no "home," or raw slug)
+                try:
+                    import sys
+                    backend_root = Path(__file__).resolve().parents[3]  # -> redfin_FSBO_backend -> Redfin_Scraper -> Scraper_backend
+                    if str(backend_root) not in sys.path:
+                        sys.path.insert(0, str(backend_root))
+                    from utils.address_utils import redfin_address_from_url
+                    address = redfin_address_from_url(response.url)
+                except Exception:
+                    address = ""
             
             item["Address"] = address or ""
             item["Name"] = address or ""  # Name is same as address
