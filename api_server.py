@@ -68,7 +68,7 @@ def _row_to_listing(platform, row):
     bedrooms = row.get("bedrooms") or row.get("Bedrooms")
     bathrooms = row.get("bathrooms") or row.get("Bathrooms")
     price = row.get("price") or row.get("Price") or ""
-    listing_url = row.get("detail_url") or row.get("listing_link") or row.get("listing_url") or ""
+    listing_url = row.get("detail_url") or row.get("listing_link") or row.get("listing_url") or row.get("url") or row.get("link") or ""
     owner_phone = row.get("phone_number") or row.get("owner_phone") or row.get("Phone_Number") or ""
     owner_name = row.get("owner_name") or row.get("Name") or ""
     owner_email = row.get("owner_email") or ""
@@ -127,12 +127,26 @@ def geocode():
         return jsonify([]), 200
 
 def _parse_location(location):
+    """Parse 'City, ST' or 'City, Full State Name' (e.g. Chicago, Illinois) for all scrapers."""
     loc = (location or "").strip()
     parts = [p.strip() for p in loc.split(",", 1)]
     city_raw = parts[0] or ""
     state_raw = (parts[1] if len(parts) > 1 else "").strip()
     city_slug = city_raw.replace(" ", "-").lower()[:40]
-    state_map = {"illinois": "il", "new york": "ny", "california": "ca", "texas": "tx", "florida": "fl", "ohio": "oh", "georgia": "ga", "north carolina": "nc", "michigan": "mi", "pennsylvania": "pa", "new jersey": "nj", "washington": "wa", "massachusetts": "ma", "virginia": "va", "minnesota": "mn", "colorado": "co", "wisconsin": "wi", "arizona": "az", "indiana": "in", "tennessee": "tn", "missouri": "mo", "maryland": "md", "district of columbia": "dc"}
+    # Full state name → abbreviation (same rule as frontend: accept "Chicago, Illinois")
+    state_map = {
+        "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar", "california": "ca", "colorado": "co",
+        "connecticut": "ct", "delaware": "de", "florida": "fl", "georgia": "ga", "hawaii": "hi", "idaho": "id",
+        "illinois": "il", "indiana": "in", "iowa": "ia", "kansas": "ks", "kentucky": "ky", "louisiana": "la",
+        "maine": "me", "maryland": "md", "massachusetts": "ma", "michigan": "mi", "minnesota": "mn",
+        "mississippi": "ms", "missouri": "mo", "montana": "mt", "nebraska": "ne", "nevada": "nv",
+        "new hampshire": "nh", "new jersey": "nj", "new mexico": "nm", "new york": "ny",
+        "north carolina": "nc", "north dakota": "nd", "ohio": "oh", "oklahoma": "ok", "oregon": "or",
+        "pennsylvania": "pa", "rhode island": "ri", "south carolina": "sc", "south dakota": "sd",
+        "tennessee": "tn", "texas": "tx", "utah": "ut", "vermont": "vt", "virginia": "va", "washington": "wa",
+        "west virginia": "wv", "wisconsin": "wi", "wyoming": "wy",
+        "district of columbia": "dc", "d.c.": "dc",
+    }
     if len(state_raw) == 2:
         state_abbrev = state_raw.lower()
     else:
