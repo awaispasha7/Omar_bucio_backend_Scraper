@@ -29,10 +29,11 @@ def search_location():
         return jsonify({"success": False, "error": "platform and location required"}), 400
     # Stub: return URL with state abbreviation for Zillow (e.g. chicago-il not chicago-illinois)
     if "zillow" in str(platform).lower():
-        parts = [p.strip() for p in location.split(",", 1)]
+        parts = [p.strip() for p in (location or "").split(",", 1)]
         city = (parts[0] or "").replace(" ", "-").lower()[:40]
-        state = (parts[1] or "").strip()
-        state_abbrev = state[:2].lower() if len(state) == 2 else {"illinois": "il", "new york": "ny", "california": "ca", "texas": "tx", "florida": "fl", "ohio": "oh", "georgia": "ga", "north carolina": "nc", "michigan": "mi", "pennsylvania": "pa", "new jersey": "nj", "washington": "wa", "massachusetts": "ma", "virginia": "va", "minnesota": "mn", "colorado": "co", "wisconsin": "wi", "arizona": "az", "indiana": "in", "tennessee": "tn", "missouri": "mo", "maryland": "md", "district of columbia": "dc"}.get(state.lower(), state[:2].lower() if state else "")
+        state = (parts[1] if len(parts) > 1 else "").strip()
+        state_map = {"illinois": "il", "new york": "ny", "california": "ca", "texas": "tx", "florida": "fl", "ohio": "oh", "georgia": "ga", "north carolina": "nc", "michigan": "mi", "pennsylvania": "pa", "new jersey": "nj", "washington": "wa", "massachusetts": "ma", "virginia": "va", "minnesota": "mn", "colorado": "co", "wisconsin": "wi", "arizona": "az", "indiana": "in", "tennessee": "tn", "missouri": "mo", "maryland": "md", "district of columbia": "dc"}
+        state_abbrev = state[:2].lower() if len(state) == 2 else state_map.get((state or "").lower(), (state[:2].lower() if state else ""))
         slug = f"{city}-{state_abbrev}" if state_abbrev else city
         return jsonify({"success": True, "url": f"https://www.zillow.com/{slug}/fsbo/", "platform": platform, "location": location})
     return jsonify({"success": False, "error": "Restore full api_server.py for this platform"}), 400
