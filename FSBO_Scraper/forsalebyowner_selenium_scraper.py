@@ -30,6 +30,10 @@ if str(backend_root) not in sys.path:
     sys.path.append(str(backend_root))
 
 from utils.enrichment_manager import EnrichmentManager
+try:
+    from utils.pm_realtor_filter import is_pm_or_realtor
+except ImportError:
+    is_pm_or_realtor = None
 
 # Load environment variables from project root (Scraper_backend/.env)
 project_root = Path(__file__).resolve().parents[1]
@@ -369,7 +373,10 @@ class ForSaleByOwnerSeleniumScraper:
         """
         if not self.supabase:
             return False
-            
+        # Option 1: Hide PM/realtor — do not save these listings
+        if is_pm_or_realtor and is_pm_or_realtor(listing_data):
+            logger.info(f"Skipping PM/realtor listing (not saved): {listing_data.get('address', 'Unknown')[:50]}")
+            return False
         try:
             listing_link = listing_data.get("listing_link", "")
             if not listing_link:

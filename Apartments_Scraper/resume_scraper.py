@@ -163,7 +163,7 @@ def main():
         print("   The scraper will automatically:")
         print(f"   - Load progress from page {resume_page}")
         print(f"   - Skip {csv_count} listings already in CSV")
-        print(f"   - Continue until reaching 1000+ listings")
+        print(f"   - No cap: continue until consecutive empty pages")
     else:
         print()
         print("🚀 TO START SCRAPING:")

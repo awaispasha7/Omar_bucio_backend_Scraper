@@ -21,6 +21,7 @@ if str(backend_root) not in sys.path:
     sys.path.append(str(backend_root))
 
 from utils.enrichment_manager import EnrichmentManager
+from utils.pm_realtor_filter import is_pm_or_realtor
 
 
 class ImmediateCsvPipeline:
@@ -313,7 +314,11 @@ class SupabasePipeline:
         """Upload item to Supabase apartments_listings table (address, bedrooms, bathrooms, square_feet, owner_phone)."""
         if not self.enabled or not self.supabase_client:
             return item
-        
+        # Option 1: Hide PM/realtor — do not save these listings
+        item_dict = dict(item) if not isinstance(item, dict) else item
+        if is_pm_or_realtor(item_dict):
+            spider.logger.info(f"Skipping PM/realtor listing (not saved): {item_dict.get('full_address', item_dict.get('listing_url', 'Unknown'))}")
+            return item
         try:
             # Map spider fields to apartments_listings columns
             def _clean(v):

@@ -28,6 +28,10 @@ try:
     ENRICHMENT_AVAILABLE = True
 except ImportError:
     ENRICHMENT_AVAILABLE = False
+try:
+    from utils.pm_realtor_filter import is_pm_or_realtor
+except ImportError:
+    is_pm_or_realtor = None
 
 
 class RedfinScraperPipeline:
@@ -183,7 +187,6 @@ class RedfinScraperPipeline:
     def process_item(self, item, spider):
         """Process item: upload to Supabase directly"""
         adapter = ItemAdapter(item)
-        
         # Map item fields to database columns
         field_mapping = {
             'Name': adapter.get('Name', ''),
@@ -200,7 +203,10 @@ class RedfinScraperPipeline:
             'Mailing Address': adapter.get('Mailing_Address', ''),
             'Square Feet': adapter.get('Square_Feet', ''),
         }
-        
+        # Option 1: Hide PM/realtor — do not save these listings
+        if is_pm_or_realtor and is_pm_or_realtor(field_mapping):
+            spider.logger.info(f"Skipping PM/realtor listing (not saved): {field_mapping.get('Address', 'Unknown')}")
+            return item
         # Upload to Supabase directly
         if self.supabase:
             self._upload_to_supabase(field_mapping, spider)

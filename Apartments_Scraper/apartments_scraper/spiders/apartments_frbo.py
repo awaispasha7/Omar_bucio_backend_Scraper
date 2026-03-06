@@ -58,6 +58,8 @@ class ApartmentsFrboSpider(scrapy.Spider):
     
     MAX_KNOWN_HITS = 3
     _known_hits = 0
+    # No cap: when website total is not detected, use a very high target so we only stop on consecutive empty pages
+    UNLIMITED_TARGET = 10_000_000
     
     def __init__(self, city="chicago-il", url=None, resume=False, *args, **kwargs):
         """Initialize spider with optional city parameter or custom URL.
@@ -458,14 +460,11 @@ class ApartmentsFrboSpider(scrapy.Spider):
                     self.logger.debug(f"🔍 Could not extract number from text: {total_listings_text}")
             else:
                 # Log that we couldn't find the count - this helps debug
-                self.logger.warning("⚠️ Could not find total listings count on page. Will use default target of 1000.")
-                # If we're resuming and have CSV data, try to estimate target from website
-                # The website shows 807 listings, so we should target at least that
+                self.logger.warning("⚠️ Could not find total listings count on page. No cap: will continue until consecutive empty pages.")
+                # If we're resuming and have CSV data, do not set a low target - scrape all
                 if self.resume and self._total_listings_found > 0:
-                    # Set a minimum target of 807 (as shown on website) or more if we already have more
-                    estimated_target = max(807, self._total_listings_found + 50)
-                    self._total_listings_on_site = estimated_target
-                    self.logger.info(f"📊 Using estimated target of {estimated_target} listings (website shows 807, continuing until we get all)")
+                    self._total_listings_on_site = self.UNLIMITED_TARGET
+                    self.logger.info(f"📊 No cap: continuing until we get all listings (found {self._total_listings_found} so far)")
         
         # DEBUG: Save first search page HTML to inspect structure (optional, can be disabled)
         if not hasattr(self, '_first_search_page_saved'):
@@ -622,12 +621,13 @@ class ApartmentsFrboSpider(scrapy.Spider):
                 # Don't increment consecutive_empty_pages - keep it at current value
                 # We want to continue past duplicate regions to find new listings
             
-            # Log progress toward target (use website total if detected, otherwise 1000)
-            # Ensure we target at least 807 (website shows 807 listings)
-            min_target = self._total_listings_on_site if self._total_listings_on_site else max(807, 1000)
-            if self._total_listings_found < min_target:
+            # Log progress (use website total if detected, otherwise no cap)
+            min_target = self._total_listings_on_site if self._total_listings_on_site else self.UNLIMITED_TARGET
+            if min_target == self.UNLIMITED_TARGET:
+                self.logger.info(f"🎯 Progress: {self._total_listings_found} listings scraped (no cap)")
+            elif self._total_listings_found < min_target:
                 remaining = min_target - self._total_listings_found
-                self.logger.info(f"🎯 Progress: {self._total_listings_found}/{min_target} listings ({remaining} remaining to reach target)")
+                self.logger.info(f"🎯 Progress: {self._total_listings_found}/{min_target} listings ({remaining} remaining)")
             else:
                 self.logger.info(f"🎯 Target reached! {self._total_listings_found} listings scraped (target: {min_target}+)")
             
@@ -740,12 +740,13 @@ class ApartmentsFrboSpider(scrapy.Spider):
                 # Reset consecutive empty pages counter if we found listings
                 self._consecutive_empty_pages = 0
             
-            # Log progress toward target (use website total if detected, otherwise 1000)
-            # Ensure we target at least 807 (website shows 807 listings)
-            min_target = self._total_listings_on_site if self._total_listings_on_site else max(807, 1000)
-            if self._total_listings_found < min_target:
+            # Log progress (use website total if detected, otherwise no cap)
+            min_target = self._total_listings_on_site if self._total_listings_on_site else self.UNLIMITED_TARGET
+            if min_target == self.UNLIMITED_TARGET:
+                self.logger.info(f"🎯 Progress: {self._total_listings_found} listings scraped (no cap)")
+            elif self._total_listings_found < min_target:
                 remaining = min_target - self._total_listings_found
-                self.logger.info(f"🎯 Progress: {self._total_listings_found}/{min_target} listings ({remaining} remaining to reach target)")
+                self.logger.info(f"🎯 Progress: {self._total_listings_found}/{min_target} listings ({remaining} remaining)")
             else:
                 self.logger.info(f"🎯 Target reached! {self._total_listings_found} listings scraped (target: {min_target}+)")
             
@@ -841,8 +842,8 @@ class ApartmentsFrboSpider(scrapy.Spider):
             next_page_num = current_page_num + 1
             
             # IMPROVEMENT: Don't stop based on _total_pages alone - check for empty pages and target listings
-            # Use website total as target if detected, otherwise default to at least 807 (website shows 807)
-            min_target_listings = self._total_listings_on_site if self._total_listings_on_site else max(807, 1000)
+            # Use website total if detected, otherwise no cap (only stop on consecutive empty pages)
+            min_target_listings = self._total_listings_on_site if self._total_listings_on_site else self.UNLIMITED_TARGET
             if self._total_pages and next_page_num > self._total_pages + 15:
                 # We're way past the expected total
                 if self._consecutive_empty_pages >= 3 or (self._total_listings_found >= min_target_listings and self._consecutive_empty_pages >= 2):
@@ -880,8 +881,8 @@ class ApartmentsFrboSpider(scrapy.Spider):
                 self.logger.info(f"📌 Constructed base URL for pagination: {self._base_url}")
             
             # IMPROVEMENT: Don't stop based on _total_pages alone - check for empty pages and target listings
-            # Use website total as target if detected, otherwise default to at least 807 (website shows 807)
-            min_target_listings = self._total_listings_on_site if self._total_listings_on_site else max(807, 1000)
+            # Use website total if detected, otherwise no cap
+            min_target_listings = self._total_listings_on_site if self._total_listings_on_site else self.UNLIMITED_TARGET
             next_page_num = self._page_count + 1
             if self._total_pages and next_page_num > self._total_pages + 15:
                 # We're way past the expected total
@@ -1000,9 +1001,8 @@ class ApartmentsFrboSpider(scrapy.Spider):
             
             # Validate URL before following
             if next_page.startswith("https://www.apartments.com"):
-                # IMPROVEMENT: More aggressive pagination - use website total as target if detected
-                # Use actual website total if detected, otherwise default to at least 807 (website shows 807)
-                min_target_listings = self._total_listings_on_site if self._total_listings_on_site else max(807, 1000)
+                # IMPROVEMENT: More aggressive pagination - use website total if detected, otherwise no cap
+                min_target_listings = self._total_listings_on_site if self._total_listings_on_site else self.UNLIMITED_TARGET
                 
                 if self._consecutive_empty_pages >= 6:
                     # 6+ consecutive empty pages - definitely at the end
@@ -1045,9 +1045,8 @@ class ApartmentsFrboSpider(scrapy.Spider):
                 yield scrapy.Request(fallback_url, callback=self.parse_search, errback=self.handle_error, dont_filter=True)
         else:
             # No next page found - check if we should continue with fallback
-            # IMPROVEMENT: More aggressive - use website total as target if detected
-            # Ensure we target at least 807 (website shows 807 listings)
-            min_target_listings = self._total_listings_on_site if self._total_listings_on_site else max(807, 1000)
+            # IMPROVEMENT: More aggressive - use website total if detected, otherwise no cap
+            min_target_listings = self._total_listings_on_site if self._total_listings_on_site else self.UNLIMITED_TARGET
             
             if self._consecutive_empty_pages >= 6:
                 # 6+ consecutive empty pages - definitely at the end

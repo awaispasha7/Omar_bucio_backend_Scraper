@@ -21,6 +21,10 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 # Load .env so SUPABASE_* and ZYTE_* are available for scrapers and last-result
 try:
+    from utils.pm_realtor_filter import is_pm_or_realtor
+except ImportError:
+    is_pm_or_realtor = None
+try:
     from dotenv import load_dotenv
     load_dotenv(BACKEND_ROOT / ".env")
 except ImportError:
@@ -271,16 +275,36 @@ def _last_result_view():
     supabase = _get_supabase()
     if not supabase:
         return jsonify({"listings": [], "total": 0, "message": "Supabase not configured"})
+    # No cap: paginate through Supabase (PostgREST often limits to 1000/request) and return all listings
+    PAGE_SIZE = 1000
+    rows = []
     try:
-        # Order by created_at desc if column exists; limit 500
-        r = supabase.table(table_name).select("*").order("created_at", desc=True).limit(500).execute()
-        rows = (r.data or []) if hasattr(r, "data") else []
+        base_query = supabase.table(table_name).select("*").order("created_at", desc=True)
+        offset = 0
+        while True:
+            r = base_query.range(offset, offset + PAGE_SIZE - 1).execute()
+            page = (r.data or []) if hasattr(r, "data") else []
+            rows.extend(page)
+            if len(page) < PAGE_SIZE:
+                break
+            offset += PAGE_SIZE
     except Exception as e:
         try:
-            r = supabase.table(table_name).select("*").limit(500).execute()
-            rows = (r.data or []) if hasattr(r, "data") else []
-        except Exception:
-            return jsonify({"listings": [], "total": 0, "error": str(e)})
+            base_query = supabase.table(table_name).select("*")
+            offset = 0
+            rows = []
+            while True:
+                r = base_query.range(offset, offset + PAGE_SIZE - 1).execute()
+                page = (r.data or []) if hasattr(r, "data") else []
+                rows.extend(page)
+                if len(page) < PAGE_SIZE:
+                    break
+                offset += PAGE_SIZE
+        except Exception as e2:
+            return jsonify({"listings": [], "total": 0, "error": str(e2)})
+    # Option 1: Hide PM/realtor listings — only show by-owner type leads
+    if is_pm_or_realtor:
+        rows = [row for row in rows if not is_pm_or_realtor(row)]
     listings = [_row_to_listing(platform, row) for row in rows]
     return jsonify({"listings": listings, "total": len(listings)})
 

@@ -14,6 +14,7 @@ if str(backend_root) not in sys.path:
     sys.path.append(str(backend_root))
 
 from utils.enrichment_manager import EnrichmentManager
+from utils.pm_realtor_filter import is_pm_or_realtor
 
 # Load environment variables from project root (Scraper_backend/.env)
 project_root = Path(__file__).resolve().parents[3]  # Go up to Scraper_backend
@@ -78,10 +79,13 @@ class SupabasePipeline:
         if not self.supabase:
             logger.warning("Supabase client not initialized, skipping item")
             return item
-        
+        # Convert item to dict if needed
+        item_dict = dict(item) if not isinstance(item, dict) else item
+        # Option 1: Hide PM/realtor — do not save these listings
+        if is_pm_or_realtor(item_dict):
+            logger.info(f"Skipping PM/realtor listing (not saved): {item_dict.get('Address', 'Unknown')}")
+            return item
         try:
-            # Convert item to dict if needed
-            item_dict = dict(item) if not isinstance(item, dict) else item
             
             # Get listing link (URL)
             listing_link = self.clean_value(item_dict.get("Url", ""))

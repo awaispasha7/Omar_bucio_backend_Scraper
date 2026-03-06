@@ -10,6 +10,7 @@ if str(backend_root) not in sys.path:
 
 from utils.enrichment_manager import EnrichmentManager
 from utils.placeholder_utils import is_placeholder_email
+from utils.pm_realtor_filter import is_pm_or_realtor
 
 class HotpadsPipeline:
     def __init__(self):
@@ -59,7 +60,11 @@ class HotpadsPipeline:
     def process_item(self, item, spider):
         if not self.supabase:
             return item
-
+        # Option 1: Hide PM/realtor — do not save these listings
+        item_dict = dict(item) if not isinstance(item, dict) else item
+        if is_pm_or_realtor(item_dict):
+            spider.logger.info(f"Skipping PM/realtor listing (not saved): {item_dict.get('Address', 'Unknown')}")
+            return item
         # Prepare data for Supabase - map old fields to new schema
         # Convert empty strings to None for numeric fields to avoid type errors
         def get_val(key):
